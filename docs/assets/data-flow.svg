@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="590" viewBox="0 0 1200 590" role="img" aria-labelledby="title description">
+  <title id="title">Mitschrift data flow</title>
+  <desc id="description">Audio becomes a local transcript and Markdown notes on your Mac. Optional cleanup sends text over SSH to Ollama. An explicit request sends selected context through the assistant bridge to Codex, or starts an independent PandaOS or Paseo session.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#526681"/></marker>
+  </defs>
+  <rect width="1200" height="590" fill="#ffffff"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" fill="#172c4b">
+    <text x="48" y="43" font-size="28" font-weight="700">On your Mac</text>
+    <g fill="#eaf1fc" stroke="#416bb0" stroke-width="2">
+      <rect x="48" y="76" width="300" height="112" rx="8"/>
+      <rect x="450" y="76" width="300" height="112" rx="8"/>
+      <rect x="852" y="76" width="300" height="112" rx="8"/>
+    </g>
+    <g text-anchor="middle" font-size="25" font-weight="600">
+      <text x="198" y="121">System audio + mic</text>
+      <text x="600" y="121">Live transcript</text>
+      <text x="1002" y="121">Markdown notes</text>
+    </g>
+    <g text-anchor="middle" font-size="22" fill="#435978">
+      <text x="198" y="157">ScreenCaptureKit</text>
+      <text x="600" y="157">Apple SpeechAnalyzer</text>
+      <text x="1002" y="157">Local recovery files</text>
+    </g>
+    <g fill="none" stroke="#526681" stroke-width="2.5" marker-end="url(#arrow)">
+      <path d="M 350 132 H 432"/>
+      <path d="M 752 132 H 834"/>
+    </g>
+    <text x="600" y="285" text-anchor="middle" font-size="28" font-weight="700">Optional connections</text>
+    <g fill="none" stroke="#526681" stroke-width="2.5" stroke-dasharray="7 6" marker-end="url(#arrow)">
+      <path d="M 600 190 V 224 H 313 V 314"/>
+      <path d="M 600 224 H 887 V 314"/>
+    </g>
+    <g fill="#f5f7fa" stroke="#a5b2c4" stroke-width="2">
+      <rect x="48" y="334" width="530" height="214" rx="8"/>
+      <rect x="622" y="334" width="530" height="214" rx="8"/>
+    </g>
+    <g font-size="27" font-weight="700">
+      <text x="72" y="376">SSH host · Ollama</text>
+      <text x="646" y="376">SSH host · Assistant bridge</text>
+    </g>
+    <g font-size="25">
+      <text x="72" y="420">Transcript cleanup</text>
+      <text x="72" y="462">Enabled by default</text>
+      <text x="646" y="420">Send → Codex provider</text>
+      <text x="646" y="462">/analyse → PandaOS or Paseo</text>
+    </g>
+    <g font-size="21" fill="#435978">
+      <text x="72" y="512">Cleaned text returns to your notes.</text>
+      <text x="646" y="512">Selected context and attached images.</text>
+    </g>
+  </g>
+</svg>
