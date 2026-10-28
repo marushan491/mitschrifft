@@ -8,8 +8,8 @@ This guide describes source changes required by the current bridge. Its CLI call
 
 | Capability | Required components |
 | --- | --- |
-| Local transcription and notes | Mitschrift on the Mac. Disable `structureEnabled` to skip Ollama cleanup. |
-| Transcript cleanup | SSH access to your host, Ollama, and the configured `structureModel`. |
+| Local transcription and notes | Mitschrift on the Mac. Disable `structureEnabled` to skip remote cleanup. |
+| Transcript cleanup | SSH, Python 3, and an authenticated Codex CLI. No vault pointer is needed. |
 | Recent-question shortcut | SSH, Python 3, and an authenticated Codex CLI. No vault pointer is needed. |
 | Typed questions and chat | The Codex prerequisites, a vault pointer file, and a readable notes directory on the host. |
 | `/analyse` | SSH, Python 3, a vault pointer file, a running PandaOS or Paseo daemon, an available provider, and an existing workspace. |
@@ -28,7 +28,7 @@ On the Mac, confirm that your SSH alias works without an interactive password pr
 ssh -o BatchMode=yes -o ConnectTimeout=8 YOUR_SSH_ALIAS 'python3 --version'
 ```
 
-In the Mac's `~/.config/mitschrift/config.json`, set `structureHost` to that alias. Chat and Ollama cleanup share this field, even if cleanup is disabled.
+In the Mac's `~/.config/mitschrift/config.json`, set `structureHost` to that alias. Chat and cleanup share this field and the bridge.
 
 ```json
 {
@@ -37,19 +37,17 @@ In the Mac's `~/.config/mitschrift/config.json`, set `structureHost` to that ali
 }
 ```
 
-Merge these fields into the existing file. If you want Ollama cleanup, enable it and set `structureModel` to a model installed on that host.
+Merge these fields into the existing file. Enable cleanup once the bridge answers chat questions.
 
 ## 2. Adapt the Codex bridge
 
-Edit [`Sources/mitschrift/Assistant.swift`](../Sources/mitschrift/Assistant.swift) in the Mac build checkout. Set `CodexAsk.script` to the absolute path of `scripts/ask-codex.py` **on the SSH host**.
+In the Mac's config, set `bridgeScript` to the absolute path of `scripts/ask-codex.py` **on the SSH host**.
 
-Edit [`scripts/ask-codex.py`](../scripts/ask-codex.py) on the host:
+Choose the account, model, and effort for each task in the Mac's `ai` config, described in the [configuration reference](reference.md#choose-the-ai-for-each-task). Edit [`scripts/ask-codex.py`](../scripts/ask-codex.py) on the host for the remaining paths:
 
 | Symbol | Set it to… |
 | --- | --- |
 | `CODEX` | The absolute path returned by `command -v codex`. |
-| `CODEX_HOME` | The Codex home containing your authenticated account. |
-| `MODEL` and `EFFORT` | A model and reasoning effort available to that account. |
 | `VAULT` | A text file containing the absolute path of your readable notes directory. |
 
 `VAULT` is a pointer file, not the vault directory itself. For example, set it to `Path('/absolute/path/to/bridge/vault-path')`, then put one directory path in that file:
@@ -60,13 +58,13 @@ Edit [`scripts/ask-codex.py`](../scripts/ask-codex.py) on the host:
 
 The host-side notes directory and the Mac's `vaultPath` are separate settings. The repository contains neither your notes nor credentials. No Second Brain skill installation is required for ordinary chat; the current prompt asks Codex to read a few relevant vault notes.
 
-The prompts name the original user and request German answers. Adapt `CONTEXT`, `SPEAKERS`, `ASKED`, `QUESTION`, and the analysis task text for your identity and language. If you change models, update the response metadata so the UI reports the actual model and account.
+The prompts name the original user and request German answers. Adapt `CONTEXT`, `SPEAKERS`, `ASKED`, `QUESTION`, `STRUCTURE`, and the analysis task text for your identity and language. To change the built-in defaults for every Mac, edit `DEFAULTS` and `OLLAMA_DEFAULT`.
 
-The bridge passes `--ignore-user-config`, uses `CODEX_HOME`, and invokes Codex with a read-only sandbox. That sandbox does not confine reads to the vault; the prompt supplies that scope. Check your installed CLI's flags with `codex exec --help`.
+The bridge passes `--ignore-user-config`, sets `CODEX_HOME` from the configured account, and invokes Codex with a read-only sandbox. That sandbox does not confine reads to the vault; the prompt supplies that scope. Check your installed CLI's flags with `codex exec --help`.
 
 The pointer file must exist for typed questions and `/analyse`. Typed questions also require its target directory as the Codex working directory. Analysis reads the pointer file but uses the configured agent workspace. The recent-question shortcut uses a temporary directory and needs neither the pointer nor its target.
 
-Rebuild the Mac app after changing `CodexAsk.script`, using [your signing identity](../README.md#build-and-install). Python bridge changes take effect on the next request.
+Config changes take effect after relaunching Mitschrift. Python bridge changes take effect on the next request.
 
 ## 3. Connect independent analysis sessions
 
@@ -90,7 +88,7 @@ paseo workspace create --isolation local --path /absolute/path/to/checkout --tit
 paseo workspace ls --json
 ```
 
-Set `ANALYSIS_WORKSPACE` to your workspace's ID. Do not copy the repository's workspace ID. Use the same daemon and home as your Paseo client. If necessary, set `PASEO_HOME` or `PASEO_HOST` in the host process environment; the upstream CLI treats them as alternatives.
+Set `ai.analysis.workspace` in the Mac's config to your workspace's ID. Do not copy the repository's workspace ID. Use the same daemon and home as your Paseo client. If necessary, set `PASEO_HOME` or `PASEO_HOST` in the host process environment; the upstream CLI treats them as alternatives.
 
 Inspect the provider and model choices on your installation:
 
@@ -100,15 +98,17 @@ paseo run --help
 paseo provider diagnostic codex --json
 ```
 
-Replace `codex` in the diagnostic command if your provider has another ID. In the bridge's analysis `pandaos('run', ...)` call, replace these installation-specific arguments:
+Replace `codex` in the diagnostic command if your provider has another ID. Then set the analysis entry in the Mac's config:
 
-| Argument | What to choose |
-| --- | --- |
-| `--provider codex-business/gpt-6.1-sol` | Your available provider and model. `codex-business` is a custom provider ID. |
-| `--thinking high` | A reasoning level supported by that model. |
-| `--mode auto` | A mode supported by your provider. Do not assume the custom provider's `auto` mode exists upstream. |
+```json
+{
+  "ai": {
+    "analysis": { "account": "YOUR_PROVIDER_ID", "model": "YOUR_MODEL", "effort": "high", "workspace": "YOUR_WORKSPACE_ID" }
+  }
+}
+```
 
-Keep `--workspace`, `--no-wait`, `--label`, and image arguments. The helper adds `--json` to every call. Update the response text and metadata if you select a different provider or model.
+`account` and `model` become `--provider account/model`, `effort` becomes `--thinking`. `codex-business` in the defaults is a custom provider ID. The bridge also passes `--mode auto`; change it in the analysis `pandaos('run', ...)` call if your provider lacks that mode. The helper adds `--json` to every call.
 
 The bridge uses these upstream commands and response fields:
 

@@ -50,14 +50,45 @@ Mitschrift reads `~/.config/mitschrift/config.json`. Missing fields use defaults
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `structureEnabled` | `true` | Send transcript text to Ollama for cleanup. Disable it for transcription without remote cleanup. |
+| `structureEnabled` | `true` | Send transcript text through the assistant bridge for cleanup. Disable it for transcription without remote cleanup. |
 | `structureHost` | `zotac` | SSH host alias used by both cleanup and the assistant. Replace it for your installation. |
-| `structureModel` | `qwen3.5:9b` | Ollama model on that host. |
-| `structureContext` | `16384` | Ollama context size. |
-| `structureTimeoutSeconds` | `300` | Timeout for a cleanup attempt. |
+| `bridgeScript` | `/home/admin/projects/private/mitschrift/scripts/ask-codex.py` | Path of the bridge on that host. |
 | `structureMaxTries` | `8` | Maximum cleanup attempts. |
+| `ai` | `{}` | Provider, account, model, and effort for each AI task. Missing values use the defaults below. |
 
-Assistant executable paths, the Codex account, model, vault pointer, and analysis workspace are source-level settings. The [integration guide](integration.md) identifies each one.
+### Choose the AI for each task
+
+`ai` has one entry per task. Set only the fields you want to change:
+
+| Task | Used for | Default |
+| --- | --- | --- |
+| `cleanup` | The `## Struktur` section after a recording | Codex, account `business`, `gpt-6-luna`, effort `low` |
+| `live` | The recent-question shortcut | Codex, account `business`, `gpt-6-luna`, effort `low` |
+| `chat` | Typed questions and follow-ups | Codex, account `business`, `gpt-6-luna`, effort `low` |
+| `analysis` | `/analyse` sessions | PandaOS, provider `codex-business`, `gpt-6.1-sol`, thinking `high` |
+
+| Field | Applies to | Meaning |
+| --- | --- | --- |
+| `provider` | all | `codex` or `ollama`. `analysis` only supports `pandaos`. |
+| `account` | `codex` | Codex login on the host: `business` uses `~/.codex-business`, `default` uses `~/.codex`, or give an absolute path. Each folder carries its own subscription. |
+| `account` | `analysis` | PandaOS or Paseo provider ID, such as `codex-business`. |
+| `model` | all | Model name for that provider. |
+| `effort` | `codex`, `analysis` | Reasoning effort, such as `low`, `medium`, or `high`. |
+| `url` | `ollama` | Ollama server as seen from the host. Default `http://localhost:11434`. |
+| `context` | `ollama` | Context size in tokens. Default `16384`. |
+
+Ollama has no file access. Chat through Ollama answers from the transcript, screen text, and chat only, without the vault.
+
+```json
+{
+  "ai": {
+    "cleanup": { "provider": "ollama", "model": "qwen3.5:9b" },
+    "chat": { "account": "plus", "effort": "medium" }
+  }
+}
+```
+
+The chat panel and `mitschrift ask` show the account, model, and effort that answered. Executable paths, the vault pointer, and prompts remain source-level settings. The [integration guide](integration.md) identifies each one.
 
 ## Recovery, screenshots, and speakers
 

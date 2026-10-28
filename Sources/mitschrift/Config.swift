@@ -12,9 +12,8 @@ struct Config: Codable {
     var finishTimeoutSeconds: Int = 30
     var structureEnabled: Bool = true
     var structureHost: String = "zotac"
-    var structureModel: String = "qwen3.5:9b"
-    var structureContext: Int = 16384
-    var structureTimeoutSeconds: Int = 300
+    var bridgeScript: String = "/home/admin/projects/private/mitschrift/scripts/ask-codex.py"
+    var ai: [String: [String: String]] = [:]
     var structureMaxTries: Int = 8
     var ignoreApps: [String] = [
         "replayd", "coreaudiod", "screencapture", "ScreenCaptureKit",
@@ -63,9 +62,8 @@ struct Config: Codable {
         finishTimeoutSeconds = value(.finishTimeoutSeconds, fallback.finishTimeoutSeconds)
         structureEnabled = value(.structureEnabled, fallback.structureEnabled)
         structureHost = value(.structureHost, fallback.structureHost)
-        structureModel = value(.structureModel, fallback.structureModel)
-        structureContext = value(.structureContext, fallback.structureContext)
-        structureTimeoutSeconds = value(.structureTimeoutSeconds, fallback.structureTimeoutSeconds)
+        bridgeScript = value(.bridgeScript, fallback.bridgeScript)
+        ai = value(.ai, fallback.ai)
         structureMaxTries = value(.structureMaxTries, fallback.structureMaxTries)
         ignoreApps = value(.ignoreApps, fallback.ignoreApps)
         onlyApps = value(.onlyApps, fallback.onlyApps)

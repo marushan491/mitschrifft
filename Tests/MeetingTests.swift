@@ -59,6 +59,15 @@ final class MeetingTests: XCTestCase {
         XCTAssertEqual(request["meeting"] as? String, "Jour fixe")
     }
 
+    func testAIConfigKeepsPerTaskChoicesAndIgnoresRemovedOllamaFields() throws {
+        let json = #"{"structureModel": "qwen3.5:9b", "structureContext": 16384, "ai": {"cleanup": {"provider": "ollama", "model": "qwen3.5:9b"}}}"#
+        let config = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
+        XCTAssertEqual(config.ai, ["cleanup": ["provider": "ollama", "model": "qwen3.5:9b"]])
+        XCTAssertEqual(config.structureHost, "zotac")
+        XCTAssertEqual(Array(CodexAsk.bridgeArguments(host: "zotac", script: config.bridgeScript).suffix(3)),
+                       ["zotac", "python3", config.bridgeScript])
+    }
+
     func testFollowUpIncludesHistoryAndFreshTranscript() {
         let turns = [ChatTurn(question: "Wer übernimmt das?", answer: "Alex [00:10].")]
         let snapshot = AssistantSnapshot(segments: [system(20, 25, "Die Frist ist Freitag.")], elapsed: 25)

@@ -30,7 +30,7 @@ The current app interface and assistant prompts are in German. Recognition defau
 | --- | --- |
 | Transcription | Apple SpeechAnalyzer processes audio on the Mac. Separate microphone and system tracks distinguish you from other participants. |
 | Speaker separation | FluidAudio runs locally. Its model downloads from Hugging Face on first use. Labels identify voices, without establishing people's names. |
-| Transcript cleanup | **Enabled by default.** Transcript text goes over SSH to Ollama on `structureHost`. Set `structureEnabled` to `false` to skip this step. |
+| Transcript cleanup | **Enabled by default.** After a recording, the transcript text goes over SSH through the assistant bridge on `structureHost`, by default to Codex `gpt-6-luna`. `ai.cleanup` selects another model or Ollama. Set `structureEnabled` to `false` to skip this step. |
 | Chat | Only an explicit send transfers context to the SSH bridge and Codex provider. The prompt asks Codex to read relevant vault notes. Its read-only sandbox does not confine reads to that vault. |
 | Images and video | Meeting screenshots are retained by default through `keepScreenshots`. Video starts from its own control. Chat attachments are previewed before you send them. |
 
@@ -60,7 +60,7 @@ Use a Mac with macOS 26 or later, Swift 6.2 or later, and an Apple Development s
 
 3. Open macOS **System Settings → Privacy & Security** and grant **Screen & System Audio Recording** and **Microphone** access when prompted.
 
-4. Run `mitschrift config`, then edit `~/.config/mitschrift/config.json`. Set `vaultPath` to your destination. Disable remote cleanup if you have no Ollama host.
+4. Run `mitschrift config`, then edit `~/.config/mitschrift/config.json`. Set `vaultPath` to your destination. Disable remote cleanup until the assistant bridge works on your host.
 
    ```json
    {
@@ -79,7 +79,7 @@ The default notes folder is `50 Resources/Transkripte` inside the configured vau
 
 The [setup guide](docs/integration.md) covers your SSH host, Codex login, vault, CLI path, provider, and analysis workspace. Upstream Paseo supports the session commands used by the bridge. Paths and provider settings need source edits; there is currently no in-app connection wizard.
 
-Normal chat uses an ephemeral, read-only `codex exec` call. It does not create an agent session. The default model is `gpt-6-luna` with `low` reasoning effort; choose a model available to your account when adapting the bridge.
+Normal chat uses an ephemeral, read-only `codex exec` call. It does not create an agent session. The default model is `gpt-6-luna` with `low` reasoning effort. Cleanup, the recent-question shortcut, chat, and `/analyse` each take their own provider, account, model, and effort through the `ai` config; Ollama is available for all but `/analyse`. See [Choose the AI for each task](docs/reference.md#choose-the-ai-for-each-task).
 
 `/analyse <question>` explicitly starts an independent agent session. Its answer and follow-ups stay in that session. Cancelling the wait in Mitschrift does not stop an agent that has already started. Analysis uses the configured provider's normal permissions; the analysis-only prompt is not a hard read-only sandbox.
 

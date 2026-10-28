@@ -73,8 +73,6 @@ struct Structure {
         case failure(String)
     }
 
-    private final class Box: @unchecked Sendable { var text = "" }
-
     private func structure(note: URL) -> Outcome {
         guard let text = try? String(contentsOf: note, encoding: .utf8) else {
             return .failure("Notiz nicht lesbar")
@@ -82,67 +80,29 @@ struct Structure {
         let transcript = spoken(in: text)
         guard transcript.count > 200 else { return .success }
 
-        let prompt = """
-        Strukturiere dieses Meeting-Transkript. Antworte auf Deutsch, nur in diesem Format, \
-        keine Vorrede, keine Erklaerung:
-
-        ### Kernpunkte
-        - je ein Satz
-
-        ### Entscheidungen
-        - oder "keine"
-
-        ### Aufgaben
-        - [ ] Aufgabe (Verantwortlicher, Frist falls genannt)
-
-        ### Offene Fragen
-        - oder "keine"
-
-        Erfinde nichts. Das Transkript ist automatisch erkannt und enthaelt Hoerfehler, \
-        gib im Zweifel nichts an statt zu raten.
-
-        Transkript:
-        \(transcript)
-        """
-
-        let body: [String: Any] = [
-            "model": config.structureModel,
-            "prompt": prompt,
-            "stream": false,
-            "think": false,
-            "options": ["temperature": 0.2, "num_predict": 900, "num_ctx": config.structureContext]
-        ]
-        guard let payload = try? JSONSerialization.data(withJSONObject: body) else {
+        guard let payload = try? JSONSerialization.data(withJSONObject: ["mode": "structure",
+                                                                        "transcript": transcript,
+                                                                        "ai": config.ai] as [String: Any])
+        else {
             return .failure("Anfrage nicht baubar")
         }
 
-        let box = Box()
-        switch ask(payload: payload, into: box) {
-        case .failure(let reason):
-            return .failure(reason)
-        case .success:
-            let trimmed = box.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            let answer = try ask(payload: payload)
+            let trimmed = answer.answer.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return .failure("Modell hat nichts geliefert") }
-            do {
-                try insert(section: trimmed, into: note, text: text)
-                log("Struktur ergaenzt: \(note.lastPathComponent)")
-                return .success
-            } catch {
-                return .failure(error.localizedDescription)
-            }
+            try insert(section: trimmed, model: answer.model, into: note, text: text)
+            log("Struktur ergaenzt: \(note.lastPathComponent)")
+            return .success
+        } catch {
+            return .failure(error.localizedDescription)
         }
     }
 
-    private func ask(payload: Data, into box: Box) -> Outcome {
+    private func ask(payload: Data) throws -> CodexAnswer {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = [
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=8",
-            config.structureHost,
-            "curl -s -m \(config.structureTimeoutSeconds) -X POST http://localhost:11434/api/generate "
-                + "-H 'Content-Type: application/json' --data-binary @-"
-        ]
+        process.arguments = CodexAsk.bridgeArguments(host: config.structureHost, script: config.bridgeScript)
 
         let input = Pipe()
         let output = Pipe()
@@ -154,27 +114,25 @@ struct Structure {
         do {
             try process.run()
         } catch {
-            return .failure("ssh nicht startbar: \(error.localizedDescription)")
+            throw CodexError.failed("ssh nicht startbar: \(error.localizedDescription)")
         }
 
         input.fileHandleForWriting.write(payload)
         try? input.fileHandleForWriting.close()
 
         let data = output.fileHandleForReading.readDataToEndOfFile()
-        let problem = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let problem = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            return .failure("Zotac nicht erreichbar (\(problem.trimmingCharacters(in: .whitespacesAndNewlines)))")
+            let last = problem.split(separator: "\n").last.map(String.init) ?? "Exit \(process.terminationStatus)"
+            throw CodexError.failed(last)
         }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .failure("Antwort nicht lesbar")
+        do {
+            return try JSONDecoder().decode(CodexAnswer.self, from: data)
+        } catch {
+            throw CodexError.failed("Antwort von Codex unlesbar")
         }
-        if let message = object["error"] as? String {
-            return .failure("Ollama: \(message)")
-        }
-        box.text = (object["response"] as? String) ?? ""
-        return .success
     }
 
     private func spoken(in text: String) -> String {
@@ -188,7 +146,7 @@ struct Structure {
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func insert(section: String, into note: URL, text: String) throws {
+    private func insert(section: String, model: String, into note: URL, text: String) throws {
         let marker = "## Struktur"
         var body = text
 
@@ -207,7 +165,7 @@ struct Structure {
 
         \(section)
 
-        <sub>Automatisch aus dem Transkript, \(config.structureModel), \(stamp). Ungeprueft.</sub>
+        <sub>Automatisch aus dem Transkript, \(model), \(stamp). Ungeprueft.</sub>
 
         """
 

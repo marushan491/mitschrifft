@@ -21,7 +21,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     let questionButton = NSButton()
     private let presentation: AssistantPresentationGate
     private let snapshot: @MainActor () async -> AssistantSnapshot
-    private let codex = CodexAsk(host: Config.load().structureHost)
+    private let codex = CodexAsk(config: Config.load())
     private let panes = NSSegmentedControl()
     private let liveView = ChatTextView()
     private let liveScroll = NSScrollView()

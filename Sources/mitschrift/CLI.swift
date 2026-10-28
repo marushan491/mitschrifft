@@ -354,7 +354,7 @@ struct CLI {
                                          recording: true)
         let question = args.dropFirst().joined(separator: " ")
         let started = Date()
-        let reply = try await CodexAsk(host: Config.load().structureHost)
+        let reply = try await CodexAsk(config: Config.load())
             .ask(question.isEmpty ? .asked : .question, question: question, snapshot: snapshot)
         print("\(reply.account), \(reply.model) (\(reply.effort)), \(Int(Date().timeIntervalSince(started))) s gesamt")
         print("Mikro-Echo entfernt: \(partial.segments.count - segments.count) Stuecke, Sprecher: \(Set(segments.compactMap(\.speaker)).count)")

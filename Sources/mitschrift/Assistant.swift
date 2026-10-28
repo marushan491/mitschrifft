@@ -76,15 +76,26 @@ enum CodexError: LocalizedError {
 }
 
 final class CodexAsk: @unchecked Sendable {
-    static let script = "/home/admin/projects/private/mitschrift/scripts/ask-codex.py"
     static let recentSeconds: TimeInterval = 240
 
     private let host: String
+    private let script: String
+    private let ai: [String: [String: String]]
     private let lock = NSLock()
     private var process: Process?
 
-    init(host: String) {
+    init(host: String, script: String = Config().bridgeScript, ai: [String: [String: String]] = [:]) {
         self.host = host
+        self.script = script
+        self.ai = ai
+    }
+
+    convenience init(config: Config) {
+        self.init(host: config.structureHost, script: config.bridgeScript, ai: config.ai)
+    }
+
+    static func bridgeArguments(host: String, script: String) -> [String] {
+        ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, "python3", script]
     }
 
     static func request(_ mode: CodexMode, question: String, snapshot: AssistantSnapshot,
@@ -113,12 +124,13 @@ final class CodexAsk: @unchecked Sendable {
 
     func ask(_ mode: CodexMode, question: String = "", snapshot: AssistantSnapshot,
              history: [ChatTurn] = [], images: [ChatImage] = [], requestID: String? = nil) async throws -> CodexAnswer {
-        let input = try JSONSerialization.data(withJSONObject: Self.request(mode, question: question,
-                                                                          snapshot: snapshot, history: history,
-                                                                          images: images, requestID: requestID))
+        var request = Self.request(mode, question: question, snapshot: snapshot, history: history,
+                                   images: images, requestID: requestID)
+        request["ai"] = ai
+        let input = try JSONSerialization.data(withJSONObject: request)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, "python3", Self.script]
+        process.arguments = Self.bridgeArguments(host: host, script: script)
         let stdin = Pipe()
         let stdout = Pipe()
         let stderr = Pipe()
