@@ -28,6 +28,21 @@ enum CodexMode: String, Sendable {
     case question
     case analysis
     case openAnalysis = "open-analysis"
+    case targets
+}
+
+struct AnalysisTarget: Decodable, Equatable, Sendable {
+    let kind: String
+    let id: String
+    let name: String
+    var detail: String? = nil
+
+    var payload: [String: String] { ["kind": kind, "id": id] }
+}
+
+struct AnalysisTargets: Decodable, Sendable {
+    let projects: [AnalysisTarget]
+    let sessions: [AnalysisTarget]
 }
 
 struct CodexAnswer: Decodable, Sendable {
@@ -99,7 +114,8 @@ final class CodexAsk: @unchecked Sendable {
     }
 
     static func request(_ mode: CodexMode, question: String, snapshot: AssistantSnapshot,
-                        history: [ChatTurn] = [], images: [ChatImage] = [], requestID: String? = nil) -> [String: Any] {
+                        history: [ChatTurn] = [], images: [ChatImage] = [], requestID: String? = nil,
+                        target: AnalysisTarget? = nil) -> [String: Any] {
         let since = mode == .asked ? max(0, snapshot.elapsed - recentSeconds) : 0
         var request: [String: Any] = ["mode": mode.rawValue,
                        "question": question,
@@ -119,13 +135,34 @@ final class CodexAsk: @unchecked Sendable {
             } + current.map(\.payload)
         }
         if let requestID { request["requestID"] = requestID }
+        if mode == .analysis, let target { request["target"] = target.payload }
         return request
     }
 
     func ask(_ mode: CodexMode, question: String = "", snapshot: AssistantSnapshot,
-             history: [ChatTurn] = [], images: [ChatImage] = [], requestID: String? = nil) async throws -> CodexAnswer {
-        var request = Self.request(mode, question: question, snapshot: snapshot, history: history,
-                                   images: images, requestID: requestID)
+             history: [ChatTurn] = [], images: [ChatImage] = [], requestID: String? = nil,
+             target: AnalysisTarget? = nil) async throws -> CodexAnswer {
+        let request = Self.request(mode, question: question, snapshot: snapshot, history: history,
+                                   images: images, requestID: requestID, target: target)
+        let output = try await call(request)
+        do {
+            return try JSONDecoder().decode(CodexAnswer.self, from: output)
+        } catch {
+            throw CodexError.failed("Antwort von Codex unlesbar.")
+        }
+    }
+
+    func targets() async throws -> AnalysisTargets {
+        let output = try await call(["mode": CodexMode.targets.rawValue])
+        do {
+            return try JSONDecoder().decode(AnalysisTargets.self, from: output)
+        } catch {
+            throw CodexError.failed("Projektliste von PandaOS unlesbar.")
+        }
+    }
+
+    private func call(_ body: [String: Any]) async throws -> Data {
+        var request = body
         request["ai"] = ai
         let input = try JSONSerialization.data(withJSONObject: request)
         let process = Process()
@@ -176,11 +213,7 @@ final class CodexAsk: @unchecked Sendable {
             }
           }
         }, onCancel: { self.cancel() })
-        do {
-            return try JSONDecoder().decode(CodexAnswer.self, from: output)
-        } catch {
-            throw CodexError.failed("Antwort von Codex unlesbar.")
-        }
+        return output
     }
 
     func cancel() {

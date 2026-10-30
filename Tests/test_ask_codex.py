@@ -55,6 +55,48 @@ class ChatBridgeTests(unittest.TestCase):
             self.assertEqual(json.loads(output.getvalue())['sessionID'], 'already-started')
             self.assertEqual(cli.call_count, 1)
 
+    def test_analysis_can_run_in_chosen_project_or_existing_session(self):
+        request_id = '8b1c8e73-9a4a-4ce9-bbe7-05026319069a'
+        base = {'mode': 'analysis', 'question': 'Prüfen', 'requestID': request_id, 'transcript': 'Text', 'history': []}
+        calls = []
+        def cli(*args):
+            calls.append(args)
+            return [] if args[0] == 'ls' else {'agentId': 'neu'}
+        project = {**base, 'target': {'kind': 'project', 'id': 'wks_00a9573d34b47a66'}}
+        with patch.object(bridge, 'pandaos', cli), \
+                patch('sys.stdin', io.StringIO(json.dumps(project))), patch('sys.stdout', io.StringIO()):
+            bridge.main()
+        self.assertIn('wks_00a9573d34b47a66', calls[-1])
+        self.assertNotIn(bridge.DEFAULTS['analysis']['workspace'], calls[-1])
+        calls.clear()
+        session = {**base, 'target': {'kind': 'session', 'id': 'b9ba4c7f-cf73-4e83-8b27-d6101564d9da'}}
+        with patch.object(bridge, 'pandaos', cli), \
+                patch('sys.stdin', io.StringIO(json.dumps(session))), patch('sys.stdout', io.StringIO()) as output:
+            bridge.main()
+        self.assertEqual([call[0] for call in calls], ['send'])
+        self.assertEqual(calls[0][1], 'b9ba4c7f-cf73-4e83-8b27-d6101564d9da')
+        self.assertIn('bisheriges Wissen', calls[0][-1])
+        self.assertEqual(json.loads(output.getvalue())['sessionID'], 'b9ba4c7f-cf73-4e83-8b27-d6101564d9da')
+        for bad in ({'kind': 'project', 'id': 'x; rm -rf /'}, {'kind': 'session', 'id': 'nope'}, 'x'):
+            with patch.object(bridge, 'pandaos', cli), \
+                    patch('sys.stdin', io.StringIO(json.dumps({**base, 'target': bad}))):
+                with self.assertRaisesRegex(SystemExit, 'Analyse-Ziel'):
+                    bridge.main()
+
+    def test_targets_lists_one_local_workspace_per_project_and_sessions(self):
+        workspaces = [
+            {'workspaceId': 'wks_aaaaaaaa', 'project': 'app', 'isolation': 'worktree', 'background': False},
+            {'workspaceId': 'wks_bbbbbbbb', 'project': 'app', 'isolation': 'local', 'background': False},
+            {'workspaceId': 'wks_cccccccc', 'project': 'hidden', 'isolation': 'local', 'background': True},
+        ]
+        sessions = [{'id': 'b9ba4c7f-cf73-4e83-8b27-d6101564d9da', 'name': 'Arbeit', 'cwd': '~/app'}]
+        with patch.object(bridge, 'pandaos', side_effect=[workspaces, sessions]), \
+                patch('sys.stdin', io.StringIO('{"mode": "targets"}')), patch('sys.stdout', io.StringIO()) as output:
+            bridge.main()
+        reply = json.loads(output.getvalue())
+        self.assertEqual(reply['projects'], [{'kind': 'project', 'id': 'wks_bbbbbbbb', 'name': 'app'}])
+        self.assertEqual(reply['sessions'][0]['name'], 'Arbeit')
+
     def test_analysis_requires_request_id_and_normal_chat_does_not_start_sessions(self):
         request = {'mode': 'analysis', 'question': 'Prüfen'}
         with patch.object(bridge, 'pandaos') as cli, patch('sys.stdin', io.StringIO(json.dumps(request))):

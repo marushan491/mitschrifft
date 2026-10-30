@@ -53,8 +53,32 @@ struct ChatImage: Sendable, Identifiable {
     var preview: NSImage { NSImage(data: jpeg)! }
 }
 
+struct SlashCommand: Equatable, Sendable {
+    let name: String
+    let summary: String
+    let takesText: Bool
+
+    static let all = [
+        SlashCommand(name: "/analyse", summary: "Unabhängige Analyse in PandaOS. Dahinter schreiben, was geprüft werden soll.", takesText: true),
+        SlashCommand(name: "/help", summary: "Zeigt alle Befehle.", takesText: false)
+    ]
+
+    static func matches(_ text: String) -> [SlashCommand] {
+        guard text.hasPrefix("/"), !text.contains(where: \.isWhitespace) else { return [] }
+        let typed = text.lowercased()
+        return all.filter { $0.name.hasPrefix(typed) }
+    }
+
+    static var help: String {
+        (all.map { "\($0.name)\($0.takesText ? " <Text>" : ""): \($0.summary)" }
+            + ["Tab vervollständigt einen angefangenen Befehl."]).joined(separator: "\n")
+    }
+}
+
 @MainActor
 class ChatTextView: NSTextView {
+    static func reader() -> ChatTextView { ChatTextView(usingTextLayoutManager: false) }
+
     override func keyDown(with event: NSEvent) {
         if !performKeyEquivalent(with: event) { super.keyDown(with: event) }
     }
@@ -86,6 +110,8 @@ final class ChatComposer: ChatTextView {
     var onSend: (() -> Void)?
     var onImages: (([ChatImage]) -> Void)?
     var onError: ((String) -> Void)?
+    var onTextChange: (() -> Void)?
+    var onComplete: (() -> Bool)?
     let placeholder = NSTextField(labelWithString: "Nachricht schreiben oder ein Bild einfügen …")
 
     override init(frame: NSRect, textContainer: NSTextContainer? = nil) {
@@ -126,6 +152,11 @@ final class ChatComposer: ChatTextView {
     override func didChangeText() {
         super.didChangeText()
         placeholder.isHidden = !string.isEmpty
+        onTextChange?()
+    }
+
+    override func insertTab(_ sender: Any?) {
+        if onComplete?() != true { super.insertTab(sender) }
     }
 
     override func insertNewline(_ sender: Any?) {

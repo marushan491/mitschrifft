@@ -79,6 +79,25 @@ final class MeetingTests: XCTestCase {
         XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: request))
     }
 
+    func testAnalysisRequestCarriesChosenTargetOnlyForAnalysis() throws {
+        let target = AnalysisTarget(kind: "session", id: "b9ba4c7f-cf73-4e83-8b27-d6101564d9da", name: "Arbeit")
+        let analysis = CodexAsk.request(.analysis, question: "Prüfen", snapshot: AssistantSnapshot(), target: target)
+        XCTAssertEqual(analysis["target"] as? [String: String], ["kind": "session", "id": target.id])
+        XCTAssertNil(CodexAsk.request(.question, question: "Frage", snapshot: AssistantSnapshot(), target: target)["target"])
+        XCTAssertNil(CodexAsk.request(.analysis, question: "Prüfen", snapshot: AssistantSnapshot())["target"])
+        let list = try JSONDecoder().decode(AnalysisTargets.self, from: Data(
+            #"{"projects":[{"kind":"project","id":"wks_00a9573d34b47a66","name":"app"}],"sessions":[]}"#.utf8))
+        XCTAssertEqual(list.projects.first?.name, "app")
+    }
+
+    func testSlashCommandSuggestionsExplainEachCommand() {
+        XCTAssertEqual(SlashCommand.matches("/").map(\.name), ["/analyse", "/help"])
+        XCTAssertEqual(SlashCommand.matches("/He").map(\.name), ["/help"])
+        XCTAssertTrue(SlashCommand.matches("/analyse Budget").isEmpty)
+        XCTAssertTrue(SlashCommand.matches("Hallo").isEmpty)
+        XCTAssertTrue(SlashCommand.all.allSatisfy { !$0.summary.isEmpty && SlashCommand.help.contains($0.name) })
+    }
+
     func testConversationIsBoundedAndResetsAtNewMeeting() {
         var conversation = AssistantConversation()
         let first = AssistantSnapshot(recording: true, startedAt: Date(timeIntervalSince1970: 100))

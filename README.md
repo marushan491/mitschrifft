@@ -81,7 +81,9 @@ The [setup guide](docs/integration.md) covers your SSH host, Codex login, vault,
 
 Normal chat uses an ephemeral, read-only `codex exec` call. It does not create an agent session. The default model is `gpt-6-luna` with `low` reasoning effort. Cleanup, the recent-question shortcut, chat, and `/analyse` each take their own provider, account, model, and effort through the `ai` config; Ollama is available for all but `/analyse`. See [Choose the AI for each task](docs/reference.md#choose-the-ai-for-each-task).
 
-`/analyse <question>` explicitly starts an independent agent session. Its answer and follow-ups stay in that session. Cancelling the wait in Mitschrift does not stop an agent that has already started. Analysis uses the configured provider's normal permissions; the analysis-only prompt is not a hard read-only sandbox.
+Typing `/` in the chat lists the commands with a short description; Tab completes a started command and `/help` shows them all.
+
+`/analyse <question>` explicitly starts an independent agent session. The **Analyse in** menu in the chat panel picks where it runs: a new session in the default workspace, a new session in one of your PandaOS projects (so it sees that project's files and rules), or an existing PandaOS session, which receives the question with the meeting context in its own history. Its answer and follow-ups stay in that session. Cancelling the wait in Mitschrift does not stop an agent that has already started. Analysis uses the configured provider's normal permissions; the analysis-only prompt is not a hard read-only sandbox.
 
 The **Open analysis in PandaOS** action relies on a PandaOS-specific tab request. With upstream Paseo, open the session manually unless you implement an equivalent action.
 

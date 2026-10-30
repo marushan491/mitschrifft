@@ -23,7 +23,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     private let snapshot: @MainActor () async -> AssistantSnapshot
     private let codex = CodexAsk(config: Config.load())
     private let panes = NSSegmentedControl()
-    private let liveView = ChatTextView()
+    private let liveView = ChatTextView.reader()
     private let liveScroll = NSScrollView()
     private let askedButton = NSButton(title: "Was wurde ich gerade gefragt?", target: nil, action: nil)
     private let query = ChatComposer(frame: .zero)
@@ -32,17 +32,22 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     private let clearButton = NSButton(title: "Neuer Chat", target: nil, action: nil)
     private let copyButton = NSButton(title: "Antwort kopieren", target: nil, action: nil)
     private let analysisButton = NSButton(title: "Analyse in PandaOS öffnen", target: nil, action: nil)
+    private let targetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private var targetsLoadedAt: Date?
+    private var loadingTargets = false
     private var analysisSessionID: String?
     private var analysisRequestKey = ""
     private var analysisRequestID: String?
     private let status = NSTextField(labelWithString: "")
-    private let answerView = ChatTextView()
+    private let answerView = ChatTextView.reader()
     private let answerScroll = NSScrollView()
     private let surface = NSVisualEffectView()
     private let meetingStatus = NSTextField(labelWithString: "Bereit für deine Frage")
     private let imageButton = NSButton(title: "Bild", target: nil, action: nil)
     private let shotButton = NSButton(title: "Screenshot", target: nil, action: nil)
     private let previews = NSStackView()
+    private let commandHints = NSStackView()
+    private var showingHelp = false
     private var draftImages: [ChatImage] = []
     private var pendingImages: [ChatImage] = []
     private var capturing = false
@@ -114,6 +119,8 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         query.onSend = { [weak self] in self?.sendTapped() }
         query.onImages = { [weak self] in self?.attach($0) }
         query.onError = { [weak self] in self?.status.stringValue = $0 }
+        query.onTextChange = { [weak self] in self?.updateCommandHints() }
+        query.onComplete = { [weak self] in self?.completeCommand() ?? false }
         sendButton.bezelStyle = .rounded
         sendButton.keyEquivalent = "\r"
         sendButton.keyEquivalentModifierMask = []
@@ -195,17 +202,21 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         previews.isHidden = true
         let tools = NSStackView(views: [imageButton, shotButton, NSView(), cancelButton, sendButton])
         tools.spacing = 8
-        let compose = ComposerSurface(views: [previews, editor, tools])
+        commandHints.orientation = .vertical
+        commandHints.alignment = .leading
+        commandHints.spacing = 2
+        commandHints.isHidden = true
+        let compose = ComposerSurface(views: [previews, commandHints, editor, tools])
         compose.orientation = .vertical
         compose.alignment = .leading
         compose.spacing = 10
         compose.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         compose.wantsLayer = true
         compose.layer?.cornerRadius = 14
-        for view in [previews, editor, tools] {
+        for view in [previews, commandHints, editor, tools] {
             view.widthAnchor.constraint(equalTo: compose.widthAnchor, constant: -24).isActive = true
         }
-        let hint = NSTextField(labelWithString: "Enter sendet, ⇧ Enter für eine neue Zeile. /analyse startet Sol in PandaOS.")
+        let hint = NSTextField(labelWithString: "Enter sendet, ⇧ Enter für eine neue Zeile. /help zeigt alle Befehle.")
         hint.font = .systemFont(ofSize: 12)
         hint.textColor = ChatColors.secondary
         hint.lineBreakMode = .byWordWrapping
@@ -214,7 +225,18 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         navigation.spacing = 8
         let actions = NSStackView(views: [askedButton, NSView(), analysisButton])
         actions.spacing = 8
-        let stack = NSStackView(views: [header, navigation, body, actions, status, compose, hint])
+        let targetLabel = NSTextField(labelWithString: "Analyse in")
+        targetLabel.font = .systemFont(ofSize: 12)
+        targetLabel.textColor = ChatColors.secondary
+        targetPopup.controlSize = .small
+        targetPopup.font = .systemFont(ofSize: 12)
+        targetPopup.setAccessibilityLabel("Ziel für /analyse")
+        targetPopup.toolTip = "Neue Session, Projekt oder bestehende PandaOS-Session für /analyse"
+        targetPopup.addItem(withTitle: Self.defaultTargetTitle)
+        targetPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let targetRow = NSStackView(views: [targetLabel, targetPopup])
+        targetRow.spacing = 8
+        let stack = NSStackView(views: [header, navigation, body, actions, targetRow, status, compose, hint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -228,7 +250,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                 stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16)
             ])
         }
-        for view in [header, navigation, body, actions, status, compose, hint] {
+        for view in [header, navigation, body, actions, targetRow, status, compose, hint] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         panel.setFrameAutosaveName("MitschriftGespräch")
@@ -264,10 +286,53 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
     }
 
+    private static let defaultTargetTitle = "Neue Session (Standard)"
+
+    private var selectedTarget: AnalysisTarget? {
+        targetPopup.selectedItem?.representedObject as? AnalysisTarget
+    }
+
+    private func loadTargets() {
+        guard !loadingTargets, targetsLoadedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true else { return }
+        loadingTargets = true
+        Task { @MainActor in
+            defer { loadingTargets = false }
+            guard let list = try? await codex.targets() else { return }
+            targetsLoadedAt = Date()
+            fillTargetMenu(list)
+        }
+    }
+
+    private func fillTargetMenu(_ list: AnalysisTargets) {
+        let keep = selectedTarget
+        let menu = NSMenu()
+        menu.addItem(withTitle: Self.defaultTargetTitle, action: nil, keyEquivalent: "")
+        for (header, items) in [("Projekt, neue Session", list.projects), ("Bestehende Session", list.sessions)]
+        where !items.isEmpty {
+            menu.addItem(.separator())
+            menu.addItem(NSMenuItem.sectionHeader(title: header))
+            for target in items {
+                let item = NSMenuItem(title: target.name, action: nil, keyEquivalent: "")
+                item.representedObject = target
+                item.toolTip = target.detail
+                menu.addItem(item)
+            }
+        }
+        targetPopup.menu = menu
+        if let keep, let index = menu.items.firstIndex(where: {
+            ($0.representedObject as? AnalysisTarget).map { $0.kind == keep.kind && $0.id == keep.id } ?? false
+        }) {
+            targetPopup.selectItem(at: index)
+        } else {
+            targetPopup.selectItem(at: 0)
+        }
+    }
+
     func show(justAsked: Bool = false) {
         panes.selectedSegment = 1
         paneChanged()
         present(focus: !justAsked)
+        loadTargets()
         if justAsked { run(.asked) }
     }
 
@@ -343,6 +408,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     @objc private func clearTapped() {
         guard task == nil, !capturing else { return }
         conversation.clear()
+        showingHelp = false
         analysisSessionID = nil
         analysisRequestID = nil
         analysisButton.isHidden = true
@@ -366,13 +432,24 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     @objc private func sendTapped() {
         let question = query.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty || !draftImages.isEmpty else { return }
+        if question == "/help" {
+            showHelp()
+            return
+        }
+        if let command = question.split(whereSeparator: \.isWhitespace).first.map(String.init),
+           command.dropFirst().allSatisfy(\.isLetter), command.count > 1, command.hasPrefix("/"),
+           !SlashCommand.all.contains(where: { $0.name == command.lowercased() }) {
+            if command == question, completeCommand() { return }
+            status.stringValue = "Unbekannter Befehl \(command). /help zeigt alle Befehle."
+            return
+        }
         if question == "/analyse" || question.hasPrefix("/analyse ") || question.hasPrefix("/analyse\n") {
             let topic = String(question.dropFirst(8)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !topic.isEmpty else {
-                status.stringValue = "Schreib hinter /analyse, was Sol unabhängig prüfen soll."
+                status.stringValue = "Schreib hinter /analyse, was geprüft werden soll."
                 return
             }
-            let key = question + draftImages.map { $0.id.uuidString }.joined()
+            let key = question + draftImages.map { $0.id.uuidString }.joined() + (selectedTarget.map { $0.kind + $0.id } ?? "")
             if analysisRequestID == nil || analysisRequestKey != key {
                 analysisRequestKey = key
                 analysisRequestID = UUID().uuidString
@@ -409,6 +486,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
 
     private func run(_ mode: CodexMode, question: String = "") {
         guard task == nil, !capturing else { return }
+        showingHelp = false
         setBusy(true)
         let title = mode == .asked ? "Was wurde ich gerade gefragt?" : (mode == .analysis ? "/analyse " : "") + question
         let started = Date()
@@ -418,9 +496,10 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                 self?.status.stringValue = "\(state), \(Int(Date().timeIntervalSince(started))) s …"
             }
         }
-        status.stringValue = mode == .analysis ? "Unabhängige Sol-Analyse wird in PandaOS gestartet …" : "Codex denkt nach …"
+        status.stringValue = mode == .analysis ? "Analyse wird in PandaOS gestartet …" : "Codex denkt nach …"
         task = Task { @MainActor in
             let current = await snapshot()
+            let analysisTarget = selectedTarget
             conversation.update(for: current)
             pendingQuestion = title
             pendingImages = mode == .asked ? [] : draftImages
@@ -432,7 +511,8 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                 }
                 let reply = try await codex.ask(mode, question: question, snapshot: current,
                                                 history: conversation.turns, images: pendingImages,
-                                                requestID: mode == .analysis ? analysisRequestID : nil)
+                                                requestID: mode == .analysis ? analysisRequestID : nil,
+                                                target: mode == .analysis ? analysisTarget : nil)
                 try Task.checkCancellation()
                 if let sessionID = reply.sessionID {
                     analysisSessionID = sessionID
@@ -476,6 +556,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         cancelButton.isHidden = !busy
         clearButton.isEnabled = !busy
         analysisButton.isEnabled = !busy
+        targetPopup.isEnabled = !busy
         query.isEditable = !busy
         imageButton.isEnabled = !busy
         shotButton.isEnabled = !busy
@@ -537,7 +618,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
 
     private func render() {
         let text = NSMutableAttributedString()
-        if conversation.turns.isEmpty, pendingQuestion == nil {
+        if conversation.turns.isEmpty, pendingQuestion == nil, !showingHelp {
             text.append(NSAttributedString(string: "Stell Luna eine Frage.\n\nWas wurde besprochen? Was zeigt der Bildschirm?\nSchreib deine Frage oder hänge ein Bild an.\n\nMitschrift und Second Brain liefern den Kontext, auch für Rückfragen.", attributes: [
                 .font: NSFont.systemFont(ofSize: 15),
                 .foregroundColor: ChatColors.secondary
@@ -545,6 +626,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         }
         conversation.turns.forEach { text.append(entry(title: $0.question, body: $0.answer, images: $0.images)) }
         if let pendingQuestion { text.append(entry(title: pendingQuestion, body: "Antwort wird vorbereitet …", images: pendingImages)) }
+        if showingHelp { text.append(entry(title: "/help", body: SlashCommand.help, images: [])) }
         answerView.textStorage?.setAttributedString(text)
         answerView.scrollToEndOfDocument(nil)
         if panes.selectedSegment == 1 {
@@ -577,6 +659,62 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         }
         draftImages.append(contentsOf: images)
         renderPreviews()
+    }
+
+    private func updateCommandHints() {
+        commandHints.arrangedSubviews.forEach { commandHints.removeArrangedSubview($0); $0.removeFromSuperview() }
+        let matches = SlashCommand.matches(query.string)
+        for command in matches {
+            let title = NSMutableAttributedString(string: command.name, attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: ChatColors.ink])
+            title.append(NSAttributedString(string: "  " + command.summary, attributes: [
+                .font: NSFont.systemFont(ofSize: 12), .foregroundColor: ChatColors.secondary]))
+            let row = NSButton(title: command.name, target: self, action: #selector(commandTapped(_:)))
+            row.isBordered = false
+            row.attributedTitle = title
+            row.alignment = .left
+            row.lineBreakMode = .byTruncatingTail
+            row.identifier = NSUserInterfaceItemIdentifier(command.name)
+            row.toolTip = command.summary
+            row.setAccessibilityLabel("\(command.name): \(command.summary)")
+            row.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            commandHints.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: commandHints.widthAnchor).isActive = true
+        }
+        commandHints.isHidden = matches.isEmpty
+    }
+
+    private func completeCommand() -> Bool {
+        let matches = SlashCommand.matches(query.string)
+        guard let command = matches.first, matches.count == 1 || matches.contains(where: { $0.name == query.string.lowercased() })
+        else { return false }
+        apply(matches.first { $0.name == query.string.lowercased() } ?? command)
+        return true
+    }
+
+    @objc private func commandTapped(_ sender: NSButton) {
+        guard let command = SlashCommand.all.first(where: { $0.name == sender.identifier?.rawValue }) else { return }
+        apply(command)
+    }
+
+    private func apply(_ command: SlashCommand) {
+        guard command.takesText else {
+            showHelp()
+            return
+        }
+        query.string = command.name + " "
+        query.didChangeText()
+        panel.makeFirstResponder(query)
+    }
+
+    private func showHelp() {
+        query.string = ""
+        query.didChangeText()
+        showingHelp = true
+        panes.selectedSegment = 1
+        paneChanged()
+        render()
+        panel.makeFirstResponder(query)
     }
 
     private func renderPreviews() {
