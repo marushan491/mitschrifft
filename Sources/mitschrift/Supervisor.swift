@@ -316,6 +316,7 @@ final class Supervisor {
         defer { starting = false }
         do {
             let newSink = try SegmentSink(config: config, apps: apps)
+            SharedChat.clear()
             activeSink = newSink
             let newSession = RecordingSession(locale: locale)
             try await newSession.start()
@@ -519,6 +520,7 @@ final class Supervisor {
     func assistantSnapshot() async -> AssistantSnapshot {
         guard let session, isRecording else { return AssistantSnapshot() }
         var snapshot = await session.assistantSnapshot()
+        snapshot.recordingID = sink?.id
         snapshot.meeting = meetingTitle
         snapshot.screenText = screens.last?.text
         return snapshot

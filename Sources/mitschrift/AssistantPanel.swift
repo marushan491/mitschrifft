@@ -361,7 +361,10 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
             meetingStatus.stringValue = current.recording
                 ? "\(current.meeting ?? "Besprechung")   \(formatClock(current.elapsed))"
                 : "Ohne Aufnahme mit Luna schreiben"
-            if task == nil, conversation.update(for: current) { render() }
+            if task == nil, conversation.update(for: current) {
+                SharedChat.clear()
+                render()
+            }
             guard panes.selectedSegment == 0 else { return }
             let atBottom = (liveScroll.documentVisibleRect.maxY >= (liveView.frame.height - 24))
             let text = MeetingText.live(current)
@@ -408,6 +411,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     @objc private func clearTapped() {
         guard task == nil, !capturing else { return }
         conversation.clear()
+        SharedChat.clear()
         showingHelp = false
         analysisSessionID = nil
         analysisRequestID = nil
@@ -500,7 +504,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         task = Task { @MainActor in
             let current = await snapshot()
             let analysisTarget = selectedTarget
-            conversation.update(for: current)
+            if conversation.update(for: current) { SharedChat.clear() }
             pendingQuestion = title
             pendingImages = mode == .asked ? [] : draftImages
             render()
@@ -532,6 +536,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                 }
                 status.stringValue = "\(reply.account), \(reply.model) (\(reply.effort)), \(Int(reply.seconds.rounded())) s"
                 conversation.append(question: title, answer: reply.answer, images: pendingImages)
+                SharedChat.write(conversation.turns, recordingID: current.recordingID)
             } catch is CancellationError {
                 status.stringValue = mode == .analysis
                     ? "Abgebrochen. Eine Analyse kann bereits in PandaOS laufen."

@@ -7,6 +7,7 @@ struct AssistantSnapshot: Sendable {
     var screenText: String?
     var recording = false
     var startedAt: Date?
+    var recordingID: String?
 }
 
 enum MeetingText {
@@ -122,6 +123,7 @@ final class CodexAsk: @unchecked Sendable {
                        "elapsed": formatClock(snapshot.elapsed),
                        "transcript": MeetingText.lines(snapshot.segments, since: since)]
         if let meeting = snapshot.meeting { request["meeting"] = meeting }
+        if let recordingID = snapshot.recordingID { request["recordingID"] = recordingID }
         if let screen = snapshot.screenText { request["screen"] = screen }
         if mode == .question || mode == .analysis {
             request["history"] = history.suffix(6).map {

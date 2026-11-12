@@ -14,6 +14,7 @@ struct Config: Codable {
     var structureHost: String = "zotac"
     var bridgeScript: String = "/home/admin/projects/private/mitschrift/scripts/ask-codex.py"
     var ai: [String: [String: String]] = [:]
+    var shareChat: Bool = false
     var structureMaxTries: Int = 8
     var ignoreApps: [String] = [
         "replayd", "coreaudiod", "screencapture", "ScreenCaptureKit",
@@ -64,6 +65,7 @@ struct Config: Codable {
         structureHost = value(.structureHost, fallback.structureHost)
         bridgeScript = value(.bridgeScript, fallback.bridgeScript)
         ai = value(.ai, fallback.ai)
+        shareChat = value(.shareChat, fallback.shareChat)
         structureMaxTries = value(.structureMaxTries, fallback.structureMaxTries)
         ignoreApps = value(.ignoreApps, fallback.ignoreApps)
         onlyApps = value(.onlyApps, fallback.onlyApps)

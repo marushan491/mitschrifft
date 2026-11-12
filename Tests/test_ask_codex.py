@@ -14,6 +14,14 @@ spec.loader.exec_module(bridge)
 
 
 class ChatBridgeTests(unittest.TestCase):
+    def test_analysis_live_link_never_guesses_recording(self):
+        request = {'question': 'Synthetic', 'transcript': 'Text', 'history': [], 'images': []}
+        self.assertIn('keine Live-Aufnahme-ID', bridge.analysis_task(request))
+        request['recordingID'] = '2026-01-01T12:00:00'
+        self.assertIn('recording_id=2026-01-01T12:00:00', bridge.analysis_task(request))
+        request['recordingID'] = '../private'
+        self.assertIn('keine Live-Aufnahme-ID', bridge.analysis_task(request))
+
     def test_truncated_transcript_keeps_complete_speaker_lines_and_marks_missing_context(self):
         transcript = '[00:01] Sprecher 1: ' + 'x' * bridge.LIMIT + '\n[28:27] Sprecher 2: Gibt es eine Notiz?'
         prompt = bridge.prompt({'mode': 'question', 'question': 'Wer fragt?', 'transcript': transcript})

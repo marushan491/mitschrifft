@@ -15,7 +15,7 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(name: "MitschriftTests", dependencies: ["mitschrift"], path: "Tests",
-                    exclude: ["run_checks.sh", "test_ask_codex.py"],
+                    exclude: ["run_checks.sh", "test_ask_codex.py", "test_live_mcp.py"],
                     swiftSettings: [.swiftLanguageMode(.v5)])
     ]
 )

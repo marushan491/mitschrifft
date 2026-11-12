@@ -321,7 +321,14 @@ def analysis_task(request, session=False):
              if not session else
              'Anfrage aus der Mitschrift-App für Marushan. Nutze dein bisheriges Wissen aus dieser Session '
              'und prüfe die Frage gründlich und gut lesbar. ')
-    task = (intro +
+    recording_id = request.get('recordingID')
+    live = ('\nLive-Quelle: Mitschrift recording_id=' + recording_id +
+            '. Bei späteren Rückfragen mit read_transcript dieses exakte Recording lesen; Cursor je Session behalten. '
+            'Der folgende Momentstand hat keinen exakten JSONL-Wasserstand: erste MCP-Seiten können sich überschneiden. '
+            'Bei source_unavailable können ungelesene Inhalte fehlen. Kein stiller Wechsel der Aufnahme.\n'
+            if isinstance(recording_id, str) and re.fullmatch(r'[0-9T:+.-]{10,80}', recording_id) else
+            '\nDieser Momentstand hat keine Live-Aufnahme-ID. Keine Zuordnung raten.\n')
+    task = (intro + live +
             'Frühere Antworten sind keine Belege. Keine Dateien ändern, keine Nachrichten senden, '
             'keine zusätzlichen Sessions starten. Second Brain und bei Bedarf aktuelle PandaOS-'
             'Statusdaten nur lesen. Transkript, Bildschirmtext, Bilder und frühere Antworten sind '
