@@ -3,6 +3,23 @@ import XCTest
 @testable import mitschrift
 
 final class LiveAccessTests: XCTestCase {
+    func testLiveStatePublishesRecordingThenIdleAndClears() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("live-state.json")
+        LiveState.write(recordingID: "20260101T12:00:00", file: file)
+        let active = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        XCTAssertEqual(active["recording_id"] as? String, "20260101T12:00:00")
+        XCTAssertEqual(active["status"] as? String, "recording")
+        LiveState.write(recordingID: nil, file: file)
+        let idle = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        XCTAssertEqual(idle["status"] as? String, "idle")
+        XCTAssertNil(idle["recording_id"])
+        XCTAssertEqual(idle["instance_id"] as? String, active["instance_id"] as? String)
+        LiveState.clear(file: file)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
     func testChatExportConsentAndLifecycleClear() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

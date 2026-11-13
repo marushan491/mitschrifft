@@ -4,7 +4,10 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import os
+import time
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/live_mcp.py'
@@ -49,6 +52,39 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.read(second['cursor'])['events'], [])
         self.append({'kind': 'speaker', 'speaker': 9, 'start': 0, 'end': 1})
         self.assertEqual(self.read(second['cursor'])['events'][0]['diarizer_speaker'], 9)
+
+    def test_explicit_live_state_never_infers_activity_from_partials(self):
+        self.assertEqual(self.reader.call('list_recordings', {})['live_status'], 'unavailable')
+        state = {'status': 'recording', 'recording_id': RID, 'updated_at': time.time(),
+                 'pid': os.getpid(), 'instance_id': 'synthetic-instance'}
+        file = self.root / 'live-state.json'
+        file.write_text(json.dumps(state))
+        self.assertEqual(self.reader.call('list_recordings', {})['active_recording_id'], RID)
+        with patch.object(live.os, 'kill', side_effect=ProcessLookupError()):
+            self.assertEqual(self.reader.live_status()['live_status'], 'unavailable')
+        file.write_text(json.dumps({**state, 'updated_at': time.time() - 60}))
+        self.assertEqual(self.reader.live_status()['live_status'], 'unavailable')
+        file.write_text(json.dumps({**state, 'updated_at': time.time() + 30}))
+        self.assertEqual(self.reader.live_status()['live_status'], 'unavailable')
+        state.pop('recording_id')
+        file.write_text(json.dumps({**state, 'status': 'idle'}))
+        result = self.reader.call('list_recordings', {})
+        self.assertEqual(result['live_status'], 'idle')
+        self.assertIsNone(result['active_recording_id'])
+        self.assertEqual(len(result['recordings']), 1)
+
+    def test_follow_up_combines_earlier_context_and_new_data_without_switching(self):
+        self.append({'kind': 'segment', 'track': 'system', 'start': 0, 'end': 1, 'text': 'First topic: blue cube'})
+        first = self.read()
+        context = [event['text'] for event in first['events']]
+        self.append({'kind': 'segment', 'track': 'system', 'start': 3, 'end': 4, 'text': 'Update: green sphere'})
+        later = self.read(first['cursor'])
+        context.extend(event['text'] for event in later['events'])
+        self.assertEqual(context, ['First topic: blue cube', 'Update: green sphere'])
+        self.assertEqual(later['recording_id'], first['recording_id'])
+        self.file.unlink()
+        self.assertEqual(self.read(later['cursor'])['status'], 'source_unavailable')
+        self.assertEqual(len(context), 2)
 
     def test_bounds_gaps_and_private_fields(self):
         self.append({'kind': 'screen', 'text': 'private', 'imageFile': '/private/image'})

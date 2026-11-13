@@ -512,6 +512,7 @@ final class Supervisor {
     }
 
     private func announce() {
+        LiveState.write(recordingID: isRecording ? sink?.id : nil)
         onChange?()
     }
 

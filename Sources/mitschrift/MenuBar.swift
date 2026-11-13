@@ -70,6 +70,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         SharedChat.clear()
+        LiveState.clear()
         ticker?.invalidate()
     }
 
