@@ -88,7 +88,7 @@ Ollama has no file access. Chat through Ollama answers from the transcript, scre
 }
 ```
 
-The chat panel and `mitschrift ask` show the account, model, and effort that answered. Executable paths, the vault pointer, and prompts remain source-level settings. The [integration guide](integration.md) identifies each one.
+The chat model menu selects the model for the next message and saves it in `ai.chat`. While composing `/analyse`, the same menu selects `ai.analysis`; an existing destination session keeps its own model. Available choices come from the configured Codex account cache, Ollama model list, or PandaOS provider. Discovery failure retains the current model. Selecting a model keeps provider/account and unrelated configuration fields. The chat panel and `mitschrift ask` show the account, model, and effort that answered. Executable paths, the vault pointer, and prompts remain source-level settings. The [integration guide](integration.md) identifies each one.
 
 ## Recovery, screenshots, and speakers
 

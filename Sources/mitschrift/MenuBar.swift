@@ -165,7 +165,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(action("Was wurde ich gerade gefragt?", #selector(assistantQuestion), key: "j"))
-        menu.addItem(action("Chat mit Luna…", #selector(assistantOpen)))
+        menu.addItem(action("Chat…", #selector(assistantOpen)))
         menu.addItem(action("Live-Transkript anzeigen", #selector(assistantLive)))
         let privateDisplay = action("Panda und Antworten beim Teilen verbergen", #selector(togglePrivateDisplay))
         privateDisplay.state = pet?.privacyHidden == true ? .on : .off

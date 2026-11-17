@@ -14,8 +14,8 @@ enum ChatColors {
     }
     static let surface = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 0.9)
-            : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.9)
+            ? NSColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+            : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
     }
 }
 
@@ -129,18 +129,18 @@ final class ChatComposer: ChatTextView {
         font = .systemFont(ofSize: 15)
         textColor = ChatColors.ink
         drawsBackground = false
-        textContainerInset = NSSize(width: 10, height: 10)
+        textContainerInset = NSSize(width: 4, height: 10)
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
         self.textContainer?.widthTracksTextView = true
-        setAccessibilityLabel("Nachricht an Luna")
+        setAccessibilityLabel("Nachricht an Mitschrift")
         placeholder.font = font
         placeholder.textColor = ChatColors.secondary
         placeholder.translatesAutoresizingMaskIntoConstraints = false
         addSubview(placeholder)
         NSLayoutConstraint.activate([
-            placeholder.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 15),
+            placeholder.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
             placeholder.topAnchor.constraint(equalTo: topAnchor, constant: 10),
             placeholder.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10)
         ])

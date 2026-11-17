@@ -30,6 +30,25 @@ enum CodexMode: String, Sendable {
     case analysis
     case openAnalysis = "open-analysis"
     case targets
+    case models
+}
+
+struct AssistantModel: Decodable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let efforts: [String]
+}
+
+struct AssistantModelGroup: Decodable, Sendable {
+    let current: String
+    let provider: String
+    let account: String
+    let models: [AssistantModel]
+}
+
+struct AssistantModels: Decodable, Sendable {
+    let chat: AssistantModelGroup
+    let analysis: AssistantModelGroup
 }
 
 struct AnalysisTarget: Decodable, Equatable, Sendable {
@@ -59,6 +78,7 @@ struct ChatTurn: Sendable {
     let question: String
     let answer: String
     var images: [ChatImage] = []
+    var model: String? = nil
 }
 
 struct AssistantConversation {
@@ -73,8 +93,8 @@ struct AssistantConversation {
         return true
     }
 
-    mutating func append(question: String, answer: String, images: [ChatImage] = []) {
-        turns.append(ChatTurn(question: question, answer: answer, images: images))
+    mutating func append(question: String, answer: String, images: [ChatImage] = [], model: String? = nil) {
+        turns.append(ChatTurn(question: question, answer: answer, images: images, model: model))
         turns = Array(turns.suffix(6))
     }
 
@@ -96,7 +116,7 @@ final class CodexAsk: @unchecked Sendable {
 
     private let host: String
     private let script: String
-    private let ai: [String: [String: String]]
+    private var ai: [String: [String: String]]
     private let lock = NSLock()
     private var process: Process?
 
@@ -155,7 +175,8 @@ final class CodexAsk: @unchecked Sendable {
     }
 
     func targets() async throws -> AnalysisTargets {
-        let output = try await call(["mode": CodexMode.targets.rawValue])
+        let metadata = CodexAsk(host: host, script: script, ai: lock.withLock { ai })
+        let output = try await metadata.call(["mode": CodexMode.targets.rawValue])
         do {
             return try JSONDecoder().decode(AnalysisTargets.self, from: output)
         } catch {
@@ -163,9 +184,52 @@ final class CodexAsk: @unchecked Sendable {
         }
     }
 
+    func models() async throws -> AssistantModels {
+        let metadata = CodexAsk(host: host, script: script, ai: lock.withLock { ai })
+        let output = try await metadata.call(["mode": CodexMode.models.rawValue])
+        return try JSONDecoder().decode(AssistantModels.self, from: output)
+    }
+
+    func modelID(for task: String) -> String {
+        lock.withLock {
+            ai[task]?["model"] ?? (ai[task]?["provider"] == "ollama" ? "qwen3.5:9b" :
+                (task == "analysis" ? "gpt-6.1-sol" : "gpt-6-luna"))
+        }
+    }
+
+    static func selecting(_ model: AssistantModel, task: String,
+                          in ai: [String: [String: String]]) -> [String: [String: String]] {
+        var updated = ai
+        updated[task, default: [:]]["model"] = model.id
+        let current = ai[task]?["effort"] ?? (task == "analysis" ? "high" : "low")
+        if !model.efforts.isEmpty, !model.efforts.contains(current) {
+            updated[task, default: [:]]["effort"] = model.efforts.contains("medium") ? "medium" : model.efforts[0]
+        }
+        return updated
+    }
+
+    func select(_ model: AssistantModel, task: String, file: URL = Config.file) throws {
+        let updated = lock.withLock { Self.selecting(model, task: task, in: ai) }
+        var config: [String: Any] = [:]
+        if FileManager.default.fileExists(atPath: file.path) {
+            guard let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any] else {
+                throw CodexError.failed("Modelleinstellung nicht gespeichert: Konfiguration unlesbar.")
+            }
+            config = raw
+        }
+        var saved = config["ai"] as? [String: [String: String]] ?? [:]
+        saved[task, default: [:]]["model"] = model.id
+        if let effort = updated[task]?["effort"] { saved[task, default: [:]]["effort"] = effort }
+        config["ai"] = saved
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
+            .write(to: file, options: .atomic)
+        lock.withLock { ai = updated }
+    }
+
     private func call(_ body: [String: Any]) async throws -> Data {
         var request = body
-        request["ai"] = ai
+        request["ai"] = lock.withLock { ai }
         let input = try JSONSerialization.data(withJSONObject: request)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")

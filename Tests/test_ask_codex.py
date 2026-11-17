@@ -14,6 +14,32 @@ spec.loader.exec_module(bridge)
 
 
 class ChatBridgeTests(unittest.TestCase):
+    def test_model_catalog_uses_current_account_and_preserves_configured_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            (home / 'models_cache.json').write_text(json.dumps({'models': [
+                {'slug': 'test-model', 'display_name': 'Test Model', 'visibility': 'list',
+                 'supported_reasoning_levels': [{'effort': 'medium'}]},
+                {'slug': 'hidden', 'visibility': 'hide'}]}))
+            with patch.object(bridge, 'codex_home', return_value=str(home)) as account, \
+                    patch.object(bridge, 'pandaos', return_value=[{'id': 'analysis-model', 'model': 'Analysis Model',
+                        'thinkingOptionIds': ['low', 'high']}]):
+                result = bridge.model_options({'mode': 'models', 'ai': {'chat': {'account': 'chosen'}}})
+            account.assert_called_once_with('chosen')
+            self.assertEqual(result['chat']['account'], 'chosen')
+            self.assertIn('test-model', [m['id'] for m in result['chat']['models']])
+            self.assertNotIn('hidden', [m['id'] for m in result['chat']['models']])
+            self.assertIn(result['chat']['current'], [m['id'] for m in result['chat']['models']])
+            self.assertEqual(result['analysis']['models'][-1]['id'], 'analysis-model')
+
+    def test_model_discovery_failure_keeps_current_choice_without_model_execution(self):
+        with patch.object(bridge, 'codex_home', side_effect=SystemExit('missing')), \
+                patch.object(bridge, 'pandaos', side_effect=SystemExit('offline')), \
+                patch.object(bridge.subprocess, 'run') as execute:
+            result = bridge.model_options({'mode': 'models', 'ai': {'chat': {'model': 'custom-chat'}}})
+        self.assertEqual(result['chat']['models'][0]['id'], 'custom-chat')
+        execute.assert_not_called()
+
     def test_analysis_live_link_never_guesses_recording(self):
         request = {'question': 'Synthetic', 'transcript': 'Text', 'history': [], 'images': []}
         self.assertIn('keine Live-Aufnahme-ID', bridge.analysis_task(request))

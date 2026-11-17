@@ -10,7 +10,11 @@ private final class ComposerSurface: NSStackView {
     override func draw(_ dirtyRect: NSRect) {
         (NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
             ? NSColor.textBackgroundColor : ChatColors.surface).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 14, yRadius: 14).fill()
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 16, yRadius: 16)
+        path.fill()
+        NSColor.separatorColor.setStroke()
+        path.lineWidth = 1
+        path.stroke()
         super.draw(dirtyRect)
     }
 }
@@ -21,7 +25,15 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     let questionButton = NSButton()
     private let presentation: AssistantPresentationGate
     private let snapshot: @MainActor () async -> AssistantSnapshot
-    private let codex = CodexAsk(config: Config.load())
+    private let codex: CodexAsk
+    private let configFile: URL
+    private let modelPopup = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let quickActions = NSStackView()
+    private var modelGroups: AssistantModels?
+    private var selectedModels: [String: String] = [:]
+    private var modelsLoadedAt: Date?
+    private var loadingModels = false
+    private var modelLoadFailed = false
     private let panes = NSSegmentedControl()
     private let liveView = ChatTextView.reader()
     private let liveScroll = NSScrollView()
@@ -43,6 +55,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     private let answerScroll = NSScrollView()
     private let surface = NSVisualEffectView()
     private let meetingStatus = NSTextField(labelWithString: "Bereit für deine Frage")
+    private let recordingIndicator = NSImageView(image: NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Aufnahme läuft")!)
     private let imageButton = NSButton(title: "Bild", target: nil, action: nil)
     private let shotButton = NSButton(title: "Screenshot", target: nil, action: nil)
     private let previews = NSStackView()
@@ -55,14 +68,26 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     private var screenshotProcess: Process?
     private var task: Task<Void, Never>?
     private var ticker: Timer?
-    private var conversation = AssistantConversation()
+    private var conversation: AssistantConversation
     private var pendingQuestion: String?
     private var refreshing = false
 
     init(presentation: AssistantPresentationGate,
-         snapshot: @escaping @MainActor () async -> AssistantSnapshot) {
+         snapshot: @escaping @MainActor () async -> AssistantSnapshot,
+         codex: CodexAsk = CodexAsk(config: Config.load()),
+         conversation: AssistantConversation = AssistantConversation(),
+         models: AssistantModels? = nil, configFile: URL = Config.file) {
         self.presentation = presentation
         self.snapshot = snapshot
+        self.codex = codex
+        self.configFile = configFile
+        self.conversation = conversation
+        self.modelGroups = models
+        selectedModels = ["chat": codex.modelID(for: "chat"), "analysis": codex.modelID(for: "analysis")]
+        if let models {
+            selectedModels = ["chat": models.chat.current, "analysis": models.analysis.current]
+            modelsLoadedAt = Date()
+        }
         panel = AssistantWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 700),
                                 styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         super.init()
@@ -72,7 +97,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.sharingType = .none
-        panel.minSize = NSSize(width: 460, height: 660)
+        panel.minSize = NSSize(width: 460, height: 520)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.titlebarAppearsTransparent = true
@@ -86,7 +111,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
 
         panes.segmentCount = 2
-        panes.setLabel("Live-Mitschrift", forSegment: 0)
+        panes.setLabel("Live", forSegment: 0)
         panes.setLabel("Chat", forSegment: 1)
         panes.selectedSegment = 1
         panes.target = self
@@ -106,10 +131,10 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
 
         questionButton.image = NSImage(systemSymbolName: "questionmark.bubble",
                                        accessibilityDescription: "Was wurde ich gerade gefragt?")
-        questionButton.toolTip = "Chat mit Luna öffnen"
+        questionButton.toolTip = "Chat öffnen"
         questionButton.target = self
         questionButton.action = #selector(chatTapped)
-        questionButton.setAccessibilityLabel("Chat mit Luna öffnen")
+        questionButton.setAccessibilityLabel("Chat öffnen")
         askedButton.image = NSImage(systemSymbolName: "questionmark.bubble", accessibilityDescription: nil)
         askedButton.imagePosition = .imageLeading
         askedButton.bezelStyle = .rounded
@@ -135,9 +160,8 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         clearButton.target = self
         clearButton.action = #selector(clearTapped)
         sendButton.title = "Senden"
-        sendButton.image = NSImage(systemSymbolName: "arrow.up", accessibilityDescription: nil)
-        sendButton.imagePosition = .imageTrailing
-        sendButton.bezelColor = .controlAccentColor
+        sendButton.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: nil)
+        sendButton.contentTintColor = .controlAccentColor
         sendButton.setAccessibilityLabel("Nachricht senden")
         for (button, symbol, action, label) in [
             (imageButton, "paperclip", #selector(imageTapped), "Bild anhängen"),
@@ -157,25 +181,31 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         shotButton.keyEquivalentModifierMask = [.command, .shift]
         status.textColor = ChatColors.secondary
         status.font = .systemFont(ofSize: 12)
-        status.stringValue = "Luna nutzt Mitschrift, Bilder und Second Brain erst beim Senden."
+        status.stringValue = "Enter sendet. ⇧ Enter macht eine neue Zeile."
         status.lineBreakMode = .byWordWrapping
         status.maximumNumberOfLines = 2
 
-        let panda = NSImageView(image: PandaIcon.glyph(.ready, size: 30, color: .labelColor))
-        panda.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        panda.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        let title = NSTextField(labelWithString: "Dein Gespräch")
-        title.font = .systemFont(ofSize: 19, weight: .semibold)
         meetingStatus.font = .systemFont(ofSize: 12)
         meetingStatus.textColor = ChatColors.secondary
         meetingStatus.lineBreakMode = .byTruncatingTail
         meetingStatus.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let heading = NSStackView(views: [title, meetingStatus])
-        heading.orientation = .vertical
-        heading.alignment = .leading
-        heading.spacing = 3
-        let header = NSStackView(views: [panda, heading, NSView(), clearButton])
-        header.spacing = 12
+        clearButton.image = NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: nil)
+        clearButton.setAccessibilityLabel("Neuer Chat")
+        for button in [clearButton, copyButton, imageButton, shotButton, sendButton, cancelButton] {
+            button.imagePosition = .imageOnly
+            button.isBordered = false
+            button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: button == sendButton ? 22 : 15, weight: .regular)
+            button.widthAnchor.constraint(equalToConstant: button == sendButton ? 32 : 28).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            button.toolTip = button.accessibilityLabel() ?? button.title
+        }
+        cancelButton.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: nil)
+        recordingIndicator.contentTintColor = .systemRed
+        recordingIndicator.isHidden = true
+        recordingIndicator.widthAnchor.constraint(equalToConstant: 10).isActive = true
+        recordingIndicator.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        let header = NSStackView(views: [panes, recordingIndicator, meetingStatus, NSView(), copyButton, clearButton])
+        header.spacing = 8
 
         let body = NSView()
         for scroll in [answerScroll, liveScroll] {
@@ -200,8 +230,21 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         previews.spacing = 8
         previews.alignment = .top
         previews.isHidden = true
-        let tools = NSStackView(views: [imageButton, shotButton, NSView(), cancelButton, sendButton])
-        tools.spacing = 8
+        modelPopup.isBordered = false
+        modelPopup.controlSize = .small
+        modelPopup.font = .systemFont(ofSize: 12)
+        modelPopup.target = self
+        modelPopup.action = #selector(modelChanged(_:))
+        modelPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        modelPopup.setContentHuggingPriority(.required, for: .horizontal)
+        modelPopup.widthAnchor.constraint(lessThanOrEqualToConstant: 210).isActive = true
+        targetPopup.isBordered = false
+        targetPopup.target = self
+        targetPopup.action = #selector(targetChanged)
+        targetPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
+        targetPopup.widthAnchor.constraint(lessThanOrEqualToConstant: 160).isActive = true
+        let tools = NSStackView(views: [imageButton, shotButton, NSView(), targetPopup, modelPopup, cancelButton, sendButton])
+        tools.spacing = 6
         commandHints.orientation = .vertical
         commandHints.alignment = .leading
         commandHints.spacing = 2
@@ -212,34 +255,28 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         compose.spacing = 10
         compose.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         compose.wantsLayer = true
-        compose.layer?.cornerRadius = 14
+        compose.layer?.cornerRadius = 16
         for view in [previews, commandHints, editor, tools] {
             view.widthAnchor.constraint(equalTo: compose.widthAnchor, constant: -24).isActive = true
         }
-        let hint = NSTextField(labelWithString: "Enter sendet, ⇧ Enter für eine neue Zeile. /help zeigt alle Befehle.")
-        hint.font = .systemFont(ofSize: 12)
-        hint.textColor = ChatColors.secondary
-        hint.lineBreakMode = .byWordWrapping
-        hint.maximumNumberOfLines = 2
-        let navigation = NSStackView(views: [panes, NSView(), copyButton])
-        navigation.spacing = 8
-        let actions = NSStackView(views: [askedButton, NSView(), analysisButton])
-        actions.spacing = 8
-        let targetLabel = NSTextField(labelWithString: "Analyse in")
-        targetLabel.font = .systemFont(ofSize: 12)
-        targetLabel.textColor = ChatColors.secondary
+        askedButton.controlSize = .small
+        askedButton.isBordered = false
+        analysisButton.controlSize = .small
+        analysisButton.isBordered = false
+        quickActions.addArrangedSubview(askedButton)
+        quickActions.addArrangedSubview(NSView())
+        quickActions.addArrangedSubview(analysisButton)
+        quickActions.spacing = 8
         targetPopup.controlSize = .small
         targetPopup.font = .systemFont(ofSize: 12)
         targetPopup.setAccessibilityLabel("Ziel für /analyse")
         targetPopup.toolTip = "Neue Session, Projekt oder bestehende PandaOS-Session für /analyse"
         targetPopup.addItem(withTitle: Self.defaultTargetTitle)
         targetPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let targetRow = NSStackView(views: [targetLabel, targetPopup])
-        targetRow.spacing = 8
-        let stack = NSStackView(views: [header, navigation, body, actions, targetRow, status, compose, hint])
+        let stack = NSStackView(views: [header, body, quickActions, compose, status])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView?.addSubview(stack)
         if let content = panel.contentView {
@@ -250,12 +287,13 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                 stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16)
             ])
         }
-        for view in [header, navigation, body, actions, targetRow, status, compose, hint] {
+        for view in [header, body, quickActions, status, compose] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         panel.setFrameAutosaveName("MitschriftGespräch")
         render()
         paneChanged()
+        updateModelMenu()
     }
 
     private func configure(_ text: NSTextView, in scroll: NSScrollView) {
@@ -286,10 +324,89 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
     }
 
-    private static let defaultTargetTitle = "Neue Session (Standard)"
+    private static let defaultTargetTitle = "Ziel: Neue Session"
 
     private var selectedTarget: AnalysisTarget? {
         targetPopup.selectedItem?.representedObject as? AnalysisTarget
+    }
+
+    private var modelTask: String {
+        query.string.hasPrefix("/analyse") ? "analysis" : "chat"
+    }
+
+    private func loadModels() {
+        guard !loadingModels, modelsLoadedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true else { return }
+        loadingModels = true
+        modelLoadFailed = false
+        updateModelMenu()
+        Task { @MainActor in
+            defer { loadingModels = false; updateModelMenu() }
+            do {
+                let models = try await codex.models()
+                modelGroups = models
+                selectedModels = ["chat": codex.modelID(for: "chat"), "analysis": codex.modelID(for: "analysis")]
+                modelsLoadedAt = Date()
+            } catch {
+                modelLoadFailed = true
+            }
+        }
+    }
+
+    private func updateModelMenu() {
+        let task = modelTask
+        let group = task == "analysis" ? modelGroups?.analysis : modelGroups?.chat
+        let selected = selectedModels[task] ?? group?.current
+        let session = task == "analysis" && selectedTarget?.kind == "session"
+        let title = session ? "Modell der Session" :
+            group?.models.first(where: { $0.id == selected })?.title ?? selected ??
+            (task == "analysis" ? "Analyse-Modell" : "Chat-Modell")
+        let menu = NSMenu()
+        menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
+        if let group {
+            menu.addItem(NSMenuItem.sectionHeader(title: "\(group.provider) / \(group.account)"))
+            for model in group.models {
+                let item = NSMenuItem(title: model.title, action: nil, keyEquivalent: "")
+                item.representedObject = model
+                item.state = model.id == selected ? .on : .off
+                menu.addItem(item)
+            }
+            modelPopup.toolTip = session ? "Die bestehende Session behält ihr Modell." :
+                "\(group.provider), Konto \(group.account). Gilt für die nächste Nachricht."
+        } else {
+            let item = NSMenuItem(title: modelLoadFailed ? "Modelle nicht abrufbar" : "Modelle werden geladen …",
+                                 action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            if modelLoadFailed {
+                let retry = NSMenuItem(title: "Erneut laden", action: #selector(retryModels), keyEquivalent: "")
+                retry.target = self
+                menu.addItem(retry)
+            }
+        }
+        modelPopup.menu = menu
+        modelPopup.selectItem(at: 0)
+        modelPopup.setAccessibilityLabel(task == "analysis" ? "Modell für /analyse" : "Modell für Chat")
+        modelPopup.isEnabled = sendButton.isEnabled && !session
+        targetPopup.isHidden = task != "analysis" || panes.selectedSegment == 0
+        if status.stringValue.hasSuffix("für die nächste Chatnachricht.") || status.stringValue.hasSuffix("für die nächste Analyse.") {
+            status.stringValue = "\(title) für die nächste \(task == "analysis" ? "Analyse" : "Chatnachricht")."
+        }
+    }
+
+    @objc private func retryModels() { loadModels() }
+
+    @objc private func targetChanged() { updateModelMenu() }
+
+    @objc private func modelChanged(_ sender: NSPopUpButton) {
+        guard let model = sender.selectedItem?.representedObject as? AssistantModel else { return }
+        do {
+            try codex.select(model, task: modelTask, file: configFile)
+            selectedModels[modelTask] = model.id
+            status.stringValue = "\(model.title) für die nächste \(modelTask == "analysis" ? "Analyse" : "Chatnachricht")."
+        } catch {
+            status.stringValue = "Modell nicht geändert: \(error.localizedDescription)"
+        }
+        updateModelMenu()
     }
 
     private func loadTargets() {
@@ -326,6 +443,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         } else {
             targetPopup.selectItem(at: 0)
         }
+        updateModelMenu()
     }
 
     func show(justAsked: Bool = false) {
@@ -333,6 +451,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         paneChanged()
         present(focus: !justAsked)
         loadTargets()
+        loadModels()
         if justAsked { run(.asked) }
     }
 
@@ -358,9 +477,10 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         Task { @MainActor in
             defer { refreshing = false }
             let current = await snapshot()
+            recordingIndicator.isHidden = !current.recording
             meetingStatus.stringValue = current.recording
                 ? "\(current.meeting ?? "Besprechung")   \(formatClock(current.elapsed))"
-                : "Ohne Aufnahme mit Luna schreiben"
+                : "Ohne laufende Aufnahme"
             if task == nil, conversation.update(for: current) {
                 SharedChat.clear()
                 render()
@@ -390,7 +510,10 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         let live = panes.selectedSegment == 0
         liveScroll.isHidden = !live
         answerScroll.isHidden = live
+        quickActions.isHidden = live
+        updateModelMenu()
         copyButton.title = live ? "Mitschrift kopieren" : "Antwort kopieren"
+        copyButton.imagePosition = .imageOnly
         copyButton.setAccessibilityLabel(copyButton.title)
         copyButton.isEnabled = live ? !liveView.string.isEmpty : !conversation.turns.isEmpty
         refreshLocalViews()
@@ -402,6 +525,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         copyButton.title = "Kopiert"
+        copyButton.imagePosition = .imageOnly
         copyButton.setAccessibilityLabel(panes.selectedSegment == 0 ? "Mitschrift kopiert" : "Antwort kopiert")
         status.stringValue = panes.selectedSegment == 0 ? "Mitschrift kopiert." : "Antwort kopiert."
     }
@@ -535,7 +659,8 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                     analysisRequestID = nil
                 }
                 status.stringValue = "\(reply.account), \(reply.model) (\(reply.effort)), \(Int(reply.seconds.rounded())) s"
-                conversation.append(question: title, answer: reply.answer, images: pendingImages)
+                conversation.append(question: title, answer: reply.answer, images: pendingImages,
+                                    model: mode == .analysis ? "PandaOS" : reply.model)
                 SharedChat.write(conversation.turns, recordingID: current.recordingID)
             } catch is CancellationError {
                 status.stringValue = mode == .analysis
@@ -565,16 +690,17 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         query.isEditable = !busy
         imageButton.isEnabled = !busy
         shotButton.isEnabled = !busy
+        updateModelMenu()
         previews.subviews.forEach { view in
-            (view as? NSStackView)?.arrangedSubviews.compactMap { $0 as? NSButton }.forEach { $0.isEnabled = !busy }
+            view.subviews.compactMap { $0 as? NSButton }.forEach { $0.isEnabled = !busy }
         }
     }
 
-    private func entry(title: String, body: String, images: [ChatImage]) -> NSAttributedString {
+    private func entry(title: String, body: String, images: [ChatImage], model: String? = nil) -> NSAttributedString {
         let user = NSMutableParagraphStyle()
         user.alignment = .left
-        user.headIndent = 24
-        user.firstLineHeadIndent = 24
+        user.headIndent = 0
+        user.firstLineHeadIndent = 0
         user.paragraphSpacing = 8
         user.lineSpacing = 4
         let out = NSMutableAttributedString(string: "Du\n", attributes: [
@@ -582,9 +708,8 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
             .foregroundColor: ChatColors.secondary, .paragraphStyle: user
         ])
         out.append(NSAttributedString(string: title + "\n", attributes: [
-            .font: NSFont.systemFont(ofSize: 16, weight: .medium),
-            .foregroundColor: ChatColors.ink, .paragraphStyle: user,
-            .backgroundColor: NSColor.controlBackgroundColor
+            .font: NSFont.systemFont(ofSize: 15),
+            .foregroundColor: ChatColors.ink, .paragraphStyle: user
         ]))
         for image in images {
             let attachment = NSTextAttachment()
@@ -600,17 +725,23 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                 .paragraphStyle: user
             ]))
         }
-        out.append(NSAttributedString(string: "\nLuna\n", attributes: [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: ChatColors.secondary
+        let label = modelGroups?.chat.models.first(where: { $0.id == model })?.title ?? model ?? "Mitschrift"
+        let role = NSMutableParagraphStyle()
+        role.paragraphSpacingBefore = 14
+        role.paragraphSpacing = 4
+        out.append(NSAttributedString(string: "\(label)\n", attributes: [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: ChatColors.secondary,
+            .paragraphStyle: role
         ]))
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        let parsed = (try? NSMutableAttributedString(AttributedString(markdown: body, options: options)))
+        let displayBody = body.replacingOccurrences(of: "\n{2,}", with: "\n", options: .regularExpression)
+        let parsed = (try? NSMutableAttributedString(AttributedString(markdown: displayBody, options: options)))
             ?? NSMutableAttributedString(string: body)
         parsed.addAttribute(.foregroundColor, value: ChatColors.ink, range: NSRange(location: 0, length: parsed.length))
         parsed.addAttribute(.font, value: NSFont.systemFont(ofSize: 16), range: NSRange(location: 0, length: parsed.length))
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 6
-        paragraph.paragraphSpacing = 12
+        paragraph.lineSpacing = 4
+        paragraph.paragraphSpacing = 6
         parsed.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: parsed.length))
         parsed.enumerateAttribute(.inlinePresentationIntent, in: NSRange(location: 0, length: parsed.length)) { value, range, _ in
             guard let raw = value as? UInt, InlinePresentationIntent(rawValue: raw).contains(.stronglyEmphasized) else { return }
@@ -624,12 +755,16 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     private func render() {
         let text = NSMutableAttributedString()
         if conversation.turns.isEmpty, pendingQuestion == nil, !showingHelp {
-            text.append(NSAttributedString(string: "Stell Luna eine Frage.\n\nWas wurde besprochen? Was zeigt der Bildschirm?\nSchreib deine Frage oder hänge ein Bild an.\n\nMitschrift und Second Brain liefern den Kontext, auch für Rückfragen.", attributes: [
+            text.append(NSAttributedString(string: "Frag zur Besprechung\n", attributes: [
+                .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
+                .foregroundColor: ChatColors.secondary
+            ]))
+            text.append(NSAttributedString(string: "Mitschrift und Bilder gehen erst beim Senden mit.", attributes: [
                 .font: NSFont.systemFont(ofSize: 15),
                 .foregroundColor: ChatColors.secondary
             ]))
         }
-        conversation.turns.forEach { text.append(entry(title: $0.question, body: $0.answer, images: $0.images)) }
+        conversation.turns.forEach { text.append(entry(title: $0.question, body: $0.answer, images: $0.images, model: $0.model)) }
         if let pendingQuestion { text.append(entry(title: pendingQuestion, body: "Antwort wird vorbereitet …", images: pendingImages)) }
         if showingHelp { text.append(entry(title: "/help", body: SlashCommand.help, images: [])) }
         answerView.textStorage?.setAttributedString(text)
@@ -637,6 +772,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         if panes.selectedSegment == 1 {
             copyButton.isEnabled = !conversation.turns.isEmpty
             copyButton.title = "Antwort kopieren"
+            copyButton.imagePosition = .imageOnly
             copyButton.setAccessibilityLabel(copyButton.title)
         }
     }
@@ -647,12 +783,11 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     }
 
     @objc private func updateTransparency() {
-        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-        surface.blendingMode = reduce ? .withinWindow : .behindWindow
-        surface.state = reduce ? .inactive : .active
-        surface.layer?.backgroundColor = reduce ? NSColor.windowBackgroundColor.cgColor : nil
+        surface.blendingMode = .withinWindow
+        surface.state = .inactive
+        surface.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         for scroll in [liveScroll, answerScroll] {
-            scroll.backgroundColor = reduce ? .textBackgroundColor : ChatColors.surface
+            scroll.backgroundColor = ChatColors.surface
         }
     }
 
@@ -667,6 +802,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     }
 
     private func updateCommandHints() {
+        updateModelMenu()
         commandHints.arrangedSubviews.forEach { commandHints.removeArrangedSubview($0); $0.removeFromSuperview() }
         let matches = SlashCommand.matches(query.string)
         for command in matches {
@@ -727,24 +863,34 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         for (index, image) in draftImages.enumerated() {
             let preview = NSImageView(image: image.preview)
             preview.imageScaling = .scaleProportionallyUpOrDown
-            preview.imageFrameStyle = .grayBezel
+            preview.imageFrameStyle = .none
+            preview.wantsLayer = true
+            preview.layer?.cornerRadius = 8
+            preview.layer?.borderWidth = 1
+            preview.layer?.borderColor = NSColor.separatorColor.cgColor
+            preview.layer?.masksToBounds = true
             preview.setAccessibilityLabel(image.name)
             preview.heightAnchor.constraint(equalToConstant: 58).isActive = true
             preview.widthAnchor.constraint(equalToConstant: 66).isActive = true
             let remove = NSButton(image: NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: nil)!,
                                   target: self, action: #selector(removeImage(_:)))
             remove.tag = index
-            remove.bezelStyle = .rounded
+            remove.bezelStyle = .circular
             remove.contentTintColor = ChatColors.ink
-            remove.widthAnchor.constraint(equalToConstant: 44).isActive = true
-            remove.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            remove.widthAnchor.constraint(equalToConstant: 24).isActive = true
+            remove.heightAnchor.constraint(equalToConstant: 24).isActive = true
             remove.setAccessibilityLabel("\(image.name) entfernen")
             remove.toolTip = "\(image.name) entfernen"
-            let item = NSStackView(views: [preview, remove])
+            let item = NSStackView(views: [preview])
             item.orientation = .vertical
-            item.spacing = 2
+            item.widthAnchor.constraint(equalToConstant: 66).isActive = true
+            remove.translatesAutoresizingMaskIntoConstraints = false
+            item.addSubview(remove)
+            remove.topAnchor.constraint(equalTo: item.topAnchor).isActive = true
+            remove.trailingAnchor.constraint(equalTo: item.trailingAnchor).isActive = true
             previews.addArrangedSubview(item)
         }
+        if !draftImages.isEmpty { previews.addArrangedSubview(NSView()) }
         previews.isHidden = draftImages.isEmpty
     }
 

@@ -29,7 +29,7 @@ final class PanelTests: XCTestCase {
         try button("Audioaufnahme beenden und speichern").performClick(nil)
         try button("Video beenden").performClick(nil)
         XCTAssertEqual([recordings, videos], [2, 2])
-        try button("Chat mit Luna öffnen").performClick(nil)
+        try button("Chat öffnen").performClick(nil)
         XCTAssertTrue(pet.assistant.panel.isVisible)
         XCTAssertEqual(pet.panel.sharingType, .none)
         XCTAssertEqual(pet.assistant.panel.sharingType, .none)
@@ -47,7 +47,7 @@ final class PanelTests: XCTestCase {
         panel.panel.contentView?.layoutSubtreeIfNeeded()
         let views = descendants(try XCTUnwrap(panel.panel.contentView))
         let input = try XCTUnwrap(views.compactMap { $0 as? ChatComposer }
-            .first { $0.accessibilityLabel() == "Nachricht an Luna" })
+            .first { $0.accessibilityLabel() == "Nachricht an Mitschrift" })
         let send = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Senden" })
         let cancel = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Abbrechen" })
         let clear = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Neuer Chat" })
@@ -55,17 +55,19 @@ final class PanelTests: XCTestCase {
         XCTAssertEqual(send.keyEquivalentModifierMask, [])
         XCTAssertEqual(cancel.keyEquivalent, "\u{1b}")
         XCTAssertTrue(cancel.isHidden)
+        let copy = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Antwort kopieren" })
+        XCTAssertEqual(copy.imagePosition, .imageOnly)
         send.performClick(nil)
         XCTAssertTrue(send.isEnabled)
         clear.performClick(nil)
         let text = try XCTUnwrap(views.compactMap { $0 as? NSTextView }
-            .first { $0.string.contains("Stell Luna eine Frage") })
+            .first { $0.string.contains("Frag zur Besprechung") })
         XCTAssertLessThan(input.convert(input.bounds, to: nil).maxY, text.enclosingScrollView!.convert(text.enclosingScrollView!.bounds, to: nil).minY)
         XCTAssertTrue(text.isSelectable)
     }
 
     @MainActor
-    func testLiveLunaChatAndFollowUp() async throws {
+    func testLiveChatAndFollowUp() async throws {
         guard ProcessInfo.processInfo.environment["MITSCHRIFT_CHAT_SMOKE"] == "1" else {
             throw XCTSkip("Echter Business/Luna-Lauf nur mit MITSCHRIFT_CHAT_SMOKE=1")
         }
@@ -78,10 +80,10 @@ final class PanelTests: XCTestCase {
         defer { panel.panel.orderOut(nil) }
         let views = descendants(try XCTUnwrap(panel.panel.contentView))
         let input = try XCTUnwrap(views.compactMap { $0 as? ChatComposer }
-            .first { $0.accessibilityLabel() == "Nachricht an Luna" })
+            .first { $0.accessibilityLabel() == "Nachricht an Mitschrift" })
         let send = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Senden" })
         let answer = try XCTUnwrap(views.compactMap { $0 as? NSTextView }
-            .first { $0.string.contains("Stell Luna eine Frage") })
+            .first { $0.string.contains("Frag zur Besprechung") })
         input.string = "Wie heißt das Paket? Antworte nur aus dem Transkript."
         send.performClick(nil)
         XCTAssertFalse(send.isEnabled)
@@ -101,7 +103,7 @@ final class PanelTests: XCTestCase {
                           try XCTUnwrap(answer.string.range(of: "Und wann")) .lowerBound)
         let clear = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Neuer Chat" })
         clear.performClick(nil)
-        XCTAssertTrue(answer.string.contains("Stell Luna eine Frage"))
+        XCTAssertTrue(answer.string.contains("Frag zur Besprechung"))
         XCTAssertFalse(answer.string.contains("KIESEL"))
     }
 }

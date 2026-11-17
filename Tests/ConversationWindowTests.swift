@@ -4,6 +4,77 @@ import XCTest
 
 final class ConversationWindowTests: XCTestCase {
     @MainActor
+    func testSyntheticChatModelSelectionAndEvidence() async throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("config.json")
+        try Data("{\"ai\":{\"chat\":{\"account\":\"synthetic\"}}}".utf8).write(to: config)
+        let fast = AssistantModel(id: "test-fast", title: "Test schnell", efforts: ["low", "medium"])
+        let careful = AssistantModel(id: "test-careful", title: "Test gründlich", efforts: ["medium", "high"])
+        let analysisModel = AssistantModel(id: "test-analysis", title: "Test Analyse", efforts: ["high"])
+        let models = AssistantModels(
+            chat: AssistantModelGroup(current: fast.id, provider: "codex", account: "synthetic", models: [fast, careful]),
+            analysis: AssistantModelGroup(current: analysisModel.id, provider: "pandaos", account: "synthetic", models: [analysisModel]))
+        var conversation = AssistantConversation()
+        conversation.append(question: "Synthetischer Test: Was ist für Dienstag vereinbart?",
+                            answer: "**Drei blaue Würfel** werden am Dienstag geliefert.\n\nDie Rückfrage bleibt im selben Gespräch. Neue Aussagen lassen sich ergänzen, ohne das bisherige Thema zu verlieren.",
+                            model: fast.id)
+        let assistant = AssistantPanel(presentation: AssistantPresentationGate(), snapshot: { AssistantSnapshot() },
+                                       conversation: conversation, models: models, configFile: config)
+        assistant.panel.setFrameAutosaveName("")
+        assistant.show()
+        defer { assistant.panel.orderOut(nil) }
+        let content = try XCTUnwrap(assistant.panel.contentView)
+        let views = descendants(content)
+        let input = try XCTUnwrap(views.compactMap { $0 as? ChatComposer }.first)
+        let modelPicker = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }
+            .first { $0.accessibilityLabel() == "Modell für Chat" })
+        let item = try XCTUnwrap(modelPicker.itemArray.first { ($0.representedObject as? AssistantModel)?.id == careful.id })
+        modelPicker.select(item)
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(modelPicker.action), to: modelPicker.target, from: modelPicker))
+        let saved = try JSONDecoder().decode(Config.self, from: Data(contentsOf: config))
+        XCTAssertEqual(saved.ai["chat"]?["model"], careful.id)
+        XCTAssertEqual(saved.ai["chat"]?["account"], "synthetic")
+        XCTAssertTrue(modelPicker.title.contains(careful.title))
+        for theme in [NSAppearance.Name.aqua, .darkAqua] {
+            assistant.panel.appearance = NSAppearance(named: theme)
+            for width in [CGFloat(620), 460] {
+                assistant.panel.setContentSize(NSSize(width: width, height: 640))
+                for analysis in [false, true] {
+                    input.string = analysis ? "/analyse Prüfe die offene Entscheidung" : "Was hat sich seitdem geändert?"
+                    input.didChangeText()
+                    content.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(100))
+                    XCTAssertEqual(modelPicker.accessibilityLabel(), analysis ? "Modell für /analyse" : "Modell für Chat")
+                    XCTAssertEqual(modelPicker.title, analysis ? analysisModel.title : careful.title)
+                    for view in descendants(content) where !view.isHiddenOrHasHiddenAncestor &&
+                        (view is NSButton || view is NSSegmentedControl || view is NSPopUpButton) {
+                        let bounds = view.convert(view.bounds, to: content)
+                        XCTAssertGreaterThanOrEqual(bounds.minX, -1)
+                        XCTAssertLessThanOrEqual(bounds.maxX, content.bounds.maxX + 1)
+                    }
+                    if let folder = ProcessInfo.processInfo.environment["MITSCHRIFT_UI_EVIDENCE"] {
+                        assistant.panel.displayIfNeeded()
+                        let rep = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+                        content.cacheDisplay(in: content.bounds, to: rep)
+                        try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to:
+                            URL(fileURLWithPath: folder).appendingPathComponent("chat-\(Int(width))-\(theme.rawValue)-\(analysis ? "analysis" : "question").png"))
+                    }
+                }
+            }
+        }
+        let target = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }
+            .first { $0.accessibilityLabel() == "Ziel für /analyse" })
+        target.addItem(withTitle: "Synthetic existing session")
+        target.lastItem?.representedObject = AnalysisTarget(kind: "session", id: UUID().uuidString, name: "Synthetic")
+        target.selectItem(at: target.numberOfItems - 1)
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(target.action), to: target.target, from: target))
+        XCTAssertFalse(modelPicker.isEnabled)
+        XCTAssertEqual(modelPicker.title, "Modell der Session")
+    }
+    @MainActor
     private func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
     }
@@ -157,7 +228,7 @@ final class ConversationWindowTests: XCTestCase {
         for _ in 0..<120 where !send.isEnabled { try await Task.sleep(for: .seconds(1)) }
         XCTAssertTrue(send.isEnabled)
         let answer = try XCTUnwrap(descendants(content).compactMap { $0 as? NSTextView }
-            .first { $0 !== composer && $0.string.contains("Luna") })
+            .first { $0 !== composer && !$0.isEditable && !$0.isHiddenOrHasHiddenAncestor })
         XCTAssertTrue(answer.string.localizedCaseInsensitiveContains("rot"), answer.string)
         XCTAssertTrue(answer.string.localizedCaseInsensitiveContains("blau"), answer.string)
         XCTAssertTrue(answer.string.localizedCaseInsensitiveContains("kreis"), answer.string)

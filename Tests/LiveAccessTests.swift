@@ -3,6 +3,28 @@ import XCTest
 @testable import mitschrift
 
 final class LiveAccessTests: XCTestCase {
+    func testModelSelectionPreservesAccountAndUnknownConfig() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("config.json")
+        try Data("{\"custom\":true,\"ai\":{\"chat\":{\"account\":\"chosen\",\"provider\":\"codex\",\"effort\":\"low\"}}}".utf8).write(to: file)
+        let ai = ["chat": ["account": "chosen", "provider": "codex", "effort": "low"]]
+        let codex = CodexAsk(host: "unused", ai: ai)
+        let model = AssistantModel(id: "test-model", title: "Test Model", efforts: ["medium", "high"])
+        try codex.select(model, task: "chat", file: file)
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        XCTAssertEqual(saved["custom"] as? Bool, true)
+        let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: file))
+        XCTAssertEqual(config.ai["chat"]?["model"], "test-model")
+        XCTAssertEqual(config.ai["chat"]?["account"], "chosen")
+        XCTAssertEqual(config.ai["chat"]?["provider"], "codex")
+        XCTAssertEqual(config.ai["chat"]?["effort"], "medium")
+        XCTAssertNil(config.ai["analysis"])
+        XCTAssertEqual(codex.modelID(for: "chat"), model.id)
+        XCTAssertEqual(CodexAsk(host: "unused", ai: ["chat": ["provider": "ollama"]]).modelID(for: "chat"), "qwen3.5:9b")
+    }
+
     func testLiveStatePublishesRecordingThenIdleAndClears() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

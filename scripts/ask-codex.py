@@ -19,7 +19,7 @@ LIMIT = 32_000
 STRUCTURE_LIMIT = 400_000
 PANDAOS = '/home/admin/.local/bin/pandaos'
 TASKS = {'asked': 'live', 'question': 'chat', 'analysis': 'analysis', 'open-analysis': 'analysis',
-         'targets': 'analysis', 'structure': 'cleanup'}
+         'targets': 'analysis', 'models': 'chat', 'structure': 'cleanup'}
 CODEX_DEFAULT = {'provider': 'codex', 'account': 'business', 'model': 'gpt-6-luna', 'effort': 'low'}
 OLLAMA_DEFAULT = {'provider': 'ollama', 'url': 'http://localhost:11434', 'model': 'qwen3.5:9b',
                   'context': '16384'}
@@ -201,6 +201,9 @@ def main():
     if request.get('mode') not in TASKS:
         sys.exit('mode muss asked, question, analysis, open-analysis, targets oder structure sein')
     profile = settings(request)
+    if request['mode'] == 'models':
+        json.dump(model_options(request), sys.stdout, ensure_ascii=False)
+        return
     if request['mode'] == 'targets':
         json.dump(targets(), sys.stdout, ensure_ascii=False)
         return
@@ -357,6 +360,46 @@ def analysis_target(raw):
         except ValueError:
             pass
     sys.exit('Analyse-Ziel unlesbar')
+
+
+def model_options(request):
+    result = {}
+    for task, mode in [('chat', 'question'), ('analysis', 'analysis')]:
+        profile = settings({**request, 'mode': mode})
+        entries = []
+        try:
+            if profile['provider'] == 'codex':
+                cache = Path(codex_home(profile['account'])) / 'models_cache.json'
+                if cache.stat().st_size > 2_000_000:
+                    raise ValueError('model cache too large')
+                models = json.loads(cache.read_text())['models']
+                entries = [{'id': item['slug'], 'title': item.get('display_name', item['slug']),
+                            'efforts': [level['effort'] for level in item.get('supported_reasoning_levels', [])]}
+                           for item in models if item.get('visibility') == 'list']
+            elif profile['provider'] == 'ollama':
+                with urllib.request.urlopen(profile['url'].rstrip('/') + '/api/tags', timeout=8) as response:
+                    models = json.loads(response.read(2_000_001))['models']
+                entries = [{'id': item['name'], 'title': item['name'], 'efforts': []} for item in models]
+            else:
+                entries = [{'id': item['id'], 'title': item.get('model', item['id']),
+                            'efforts': item.get('thinkingOptionIds', [])}
+                           for item in pandaos('provider', 'models', profile['account'], '--thinking')]
+        except (OSError, ValueError, KeyError, TypeError, SystemExit):
+            entries = []
+        clean = []
+        for entry in entries:
+            if not isinstance(entry['id'], str) or not FIELD.fullmatch(entry['id']):
+                continue
+            efforts = entry['efforts'] if isinstance(entry['efforts'], list) else []
+            clean.append({'id': entry['id'], 'title': str(entry['title'])[:100],
+                          'efforts': [value for value in efforts
+                                      if value in ('low', 'medium', 'high', 'xhigh', 'max', 'ultra')]})
+        if profile['model'] not in [item['id'] for item in clean]:
+            clean.insert(0, {'id': profile['model'], 'title': profile['model'],
+                             'efforts': [profile['effort']] if 'effort' in profile else []})
+        result[task] = {'current': profile['model'], 'provider': profile['provider'],
+                        'account': profile.get('account', 'Ollama'), 'models': clean[:50]}
+    return result
 
 
 def targets():
