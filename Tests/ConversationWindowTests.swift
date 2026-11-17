@@ -11,12 +11,12 @@ final class ConversationWindowTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let config = directory.appendingPathComponent("config.json")
         try Data("{\"ai\":{\"chat\":{\"account\":\"synthetic\"}}}".utf8).write(to: config)
-        let fast = AssistantModel(id: "test-fast", title: "Test schnell", efforts: ["low", "medium"])
-        let careful = AssistantModel(id: "test-careful", title: "Test gründlich", efforts: ["medium", "high"])
-        let analysisModel = AssistantModel(id: "test-analysis", title: "Test Analyse", efforts: ["high"])
+        let fast = AssistantModel(id: "test-fast", title: "Test schnell", efforts: ["low", "medium"], provider: "pandaos", account: "test-one", accountTitle: "Konto Eins")
+        let careful = AssistantModel(id: "test-careful", title: "Test gründlich", efforts: ["medium", "high"], provider: "pandaos", account: "test-two", accountTitle: "Konto Zwei")
+        let analysisModel = AssistantModel(id: "test-analysis", title: "Test Analyse", efforts: ["high"], provider: "pandaos", account: "test-analysis", accountTitle: "Analyse-Konto")
         let models = AssistantModels(
-            chat: AssistantModelGroup(current: fast.id, provider: "codex", account: "synthetic", models: [fast, careful]),
-            analysis: AssistantModelGroup(current: analysisModel.id, provider: "pandaos", account: "synthetic", models: [analysisModel]))
+            chat: AssistantModelGroup(current: fast.choiceID, provider: "codex", account: "synthetic", models: [fast, careful]),
+            analysis: AssistantModelGroup(current: analysisModel.choiceID, provider: "pandaos", account: "synthetic", models: [analysisModel]))
         var conversation = AssistantConversation()
         conversation.append(question: "Synthetischer Test: Was ist für Dienstag vereinbart?",
                             answer: "**Drei blaue Würfel** werden am Dienstag geliefert.\n\nDie Rückfrage bleibt im selben Gespräch. Neue Aussagen lassen sich ergänzen, ohne das bisherige Thema zu verlieren.",
@@ -36,7 +36,8 @@ final class ConversationWindowTests: XCTestCase {
         XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(modelPicker.action), to: modelPicker.target, from: modelPicker))
         let saved = try JSONDecoder().decode(Config.self, from: Data(contentsOf: config))
         XCTAssertEqual(saved.ai["chat"]?["model"], careful.id)
-        XCTAssertEqual(saved.ai["chat"]?["account"], "synthetic")
+        XCTAssertEqual(saved.ai["chat"]?["account"], "test-two")
+        XCTAssertEqual(saved.ai["chat"]?["provider"], "pandaos")
         XCTAssertTrue(modelPicker.title.contains(careful.title))
         for theme in [NSAppearance.Name.aqua, .darkAqua] {
             assistant.panel.appearance = NSAppearance(named: theme)
@@ -281,13 +282,13 @@ final class ConversationWindowTests: XCTestCase {
         for _ in 0..<90 where !send.isEnabled { try await Task.sleep(for: .seconds(1)) }
         XCTAssertTrue(send.isEnabled)
         let open = try XCTUnwrap(descendants(content).compactMap { $0 as? NSButton }
-            .first { $0.title == "Analyse in PandaOS öffnen" })
+            .first { $0.title == "In PandaOS öffnen" })
         XCTAssertFalse(open.isHidden)
         XCTAssertTrue(input.string.isEmpty)
         open.performClick(nil)
         for _ in 0..<30 where !send.isEnabled { try await Task.sleep(for: .seconds(1)) }
         XCTAssertTrue(send.isEnabled)
         XCTAssertTrue(descendants(content).compactMap { $0 as? NSTextField }
-            .contains { $0.stringValue == "Analyse in PandaOS geöffnet." })
+            .contains { $0.stringValue == "Session in PandaOS geöffnet." })
     }
 }

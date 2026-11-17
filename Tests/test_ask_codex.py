@@ -14,31 +14,48 @@ spec.loader.exec_module(bridge)
 
 
 class ChatBridgeTests(unittest.TestCase):
-    def test_model_catalog_uses_current_account_and_preserves_configured_fallback(self):
-        with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
-            (home / 'models_cache.json').write_text(json.dumps({'models': [
-                {'slug': 'test-model', 'display_name': 'Test Model', 'visibility': 'list',
-                 'supported_reasoning_levels': [{'effort': 'medium'}]},
-                {'slug': 'hidden', 'visibility': 'hide'}]}))
-            with patch.object(bridge, 'codex_home', return_value=str(home)) as account, \
-                    patch.object(bridge, 'pandaos', return_value=[{'id': 'analysis-model', 'model': 'Analysis Model',
-                        'thinkingOptionIds': ['low', 'high']}]):
-                result = bridge.model_options({'mode': 'models', 'ai': {'chat': {'account': 'chosen'}}})
-            account.assert_called_once_with('chosen')
-            self.assertEqual(result['chat']['account'], 'chosen')
-            self.assertIn('test-model', [m['id'] for m in result['chat']['models']])
-            self.assertNotIn('hidden', [m['id'] for m in result['chat']['models']])
-            self.assertIn(result['chat']['current'], [m['id'] for m in result['chat']['models']])
-            self.assertEqual(result['analysis']['models'][-1]['id'], 'analysis-model')
+    def test_model_catalog_uses_all_pandaos_accounts(self):
+        models = [{'id': 'same-model', 'title': 'Model', 'account': account, 'provider': 'pandaos',
+                   'accountTitle': account, 'efforts': ['medium']} for account in ('codex-business', 'codex-plus', 'claude')]
+        with patch.object(bridge, 'pandaos_chat', return_value=models) as discover:
+            result = bridge.model_options({'mode': 'models', 'selectionID': 'new-client', 'ai': {'chat': {'account': 'business'}}})
+        self.assertEqual(result['chat']['current'], 'codex-business/gpt-6-luna')
+        self.assertEqual(len(result['chat']['models']), 3)
+        self.assertEqual(result['chat']['models'], result['analysis']['models'])
+        discover.assert_called_once_with({'mode': 'catalog'})
 
-    def test_model_discovery_failure_keeps_current_choice_without_model_execution(self):
-        with patch.object(bridge, 'codex_home', side_effect=SystemExit('missing')), \
-                patch.object(bridge, 'pandaos', side_effect=SystemExit('offline')), \
-                patch.object(bridge.subprocess, 'run') as execute:
-            result = bridge.model_options({'mode': 'models', 'ai': {'chat': {'model': 'custom-chat'}}})
-        self.assertEqual(result['chat']['models'][0]['id'], 'custom-chat')
-        execute.assert_not_called()
+    def test_old_native_client_only_receives_models_for_its_current_account(self):
+        models = [{'id': 'gpt-6-luna', 'title': 'Model', 'account': account, 'provider': 'pandaos',
+                   'efforts': ['low']} for account in ('codex-business', 'claude')]
+        with patch.object(bridge, 'pandaos_chat', return_value=models):
+            result = bridge.model_options({'mode': 'models'})
+        self.assertEqual(result['chat']['current'], 'gpt-6-luna')
+        self.assertEqual(len(result['chat']['models']), 1)
+        self.assertNotIn('account', result['chat']['models'][0])
+
+    def test_pandaos_question_carries_ids_context_and_images(self):
+        identifier = 'fe9edac8-b679-4b30-b21c-e1bf147e6428'
+        request = {'mode': 'question', 'question': 'Arbeite die Aufgabe aus.', 'transcript': 'Synthetisch',
+                   'history': [{'question': 'Vorher?', 'answer': 'Dienstag.'}],
+                   'conversationID': identifier, 'requestID': identifier, 'selectionID': identifier,
+                   'ai': {'chat': {'provider': 'pandaos', 'account': 'claude-team', 'model': 'synthetic', 'effort': 'high'}}}
+        output = io.StringIO()
+        with patch('sys.stdin', io.StringIO(json.dumps(request))), patch('sys.stdout', output), \
+                patch.object(bridge, 'pandaos_chat', return_value={'answer': 'Antwort', 'sessionID': identifier}) as call, \
+                patch.object(bridge.VAULT.__class__, 'read_text', side_effect=AssertionError('no vault lookup')):
+            bridge.main()
+        body = call.call_args.args[0]
+        self.assertEqual(body['account'], 'claude-team')
+        self.assertEqual(body['conversationID'], identifier)
+        self.assertIn('Dienstag.', body['prompt'])
+        self.assertIn('ausdrücklich beauftragt', body['prompt'])
+        self.assertEqual(json.loads(output.getvalue())['sessionID'], identifier)
+
+    def test_pandaos_chat_defaults_keep_low_effort_and_context_variants(self):
+        profile = bridge.settings({'mode': 'question', 'ai': {'chat': {
+            'provider': 'pandaos', 'account': 'claude', 'model': 'claude-sonnet-5[1m]'}}})
+        self.assertEqual(profile['effort'], 'low')
+        self.assertEqual(profile['model'], 'claude-sonnet-5[1m]')
 
     def test_analysis_live_link_never_guesses_recording(self):
         request = {'question': 'Synthetic', 'transcript': 'Text', 'history': [], 'images': []}

@@ -25,6 +25,28 @@ final class LiveAccessTests: XCTestCase {
         XCTAssertEqual(CodexAsk(host: "unused", ai: ["chat": ["provider": "ollama"]]).modelID(for: "chat"), "qwen3.5:9b")
     }
 
+    func testPandaOSChoiceChangesAccountAndKeepsOtherTasks() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("config.json")
+        let codex = CodexAsk(host: "unused", ai: ["cleanup": ["provider": "ollama"]])
+        let initialRevision = codex.choiceRevision
+        let model = AssistantModel(id: "same-model", title: "Model", efforts: ["high"],
+                                   provider: "pandaos", account: "second-account", accountTitle: "Second")
+        try codex.select(model, task: "chat", file: file)
+        let saved = try JSONDecoder().decode(Config.self, from: Data(contentsOf: file))
+        XCTAssertEqual(saved.ai["chat"]?["provider"], "pandaos")
+        XCTAssertEqual(saved.ai["chat"]?["account"], "second-account")
+        XCTAssertNotEqual(codex.choiceRevision, initialRevision)
+        let chatRevision = codex.choiceRevision
+        try codex.select(model, task: "analysis", file: file)
+        XCTAssertEqual(codex.choiceRevision, chatRevision)
+        var conversation = AssistantConversation()
+        let previous = conversation.id
+        conversation.clear()
+        XCTAssertNotEqual(conversation.id, previous)
+    }
+
     func testLiveStatePublishesRecordingThenIdleAndClears() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

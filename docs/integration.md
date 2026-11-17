@@ -180,3 +180,11 @@ The lookup before a repeated analysis request reduces duplicate starts but is no
 Normal chat's read-only sandbox does not apply to independent analysis. Choose and verify an appropriate provider mode. The analysis-only prompt does not enforce permissions by itself.
 
 Analysis context and attachments belong to the independent session. Their retention follows your agent host and provider. Clearing the Mitschrift chat or cancelling its wait does not delete that session.
+
+## PandaOS provider bridge
+
+`scripts/pandaos-chat.mjs` connects through the installed PandaOS CLI’s daemon client. Node must be available on the assistant bridge host. The default executable follows the existing bridge setting; `MITSCHRIFT_PANDAOS_CLI` can select another compatible installation. It resolves the CLI installation at runtime and imports its `dist/utils/client.js` and `daemon-target.js`; incompatible installations fail explicitly. It does not copy provider credentials or maintain a second login configuration.
+
+PandaOS chat creates a normal visible persistent session in the configured `workspace`, with the provider’s normal permissions and routing. New local conversations use new UUIDs. Subsequent messages carry stable message IDs; changing the selected provider uses the daemon’s provider setter, keeping the existing context. Quota rotation is handled by PandaOS. Replies report the provider and model that actually ran. Pending permission, wait or error states retain the draft and expose the session instead of pretending that an answer arrived. A local cancel ends the wait; stop an ongoing task in PandaOS. The live MCP reader remains read-only and independent.
+
+Older native clients without a selection revision receive only their configured account’s model list, so updating the bridge before the app does not offer models that the old picker cannot route.

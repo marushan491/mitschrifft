@@ -37,6 +37,10 @@ struct AssistantModel: Decodable, Equatable, Sendable {
     let id: String
     let title: String
     let efforts: [String]
+    var provider: String? = nil
+    var account: String? = nil
+    var accountTitle: String? = nil
+    var choiceID: String { account.map { $0 + "/" + id } ?? id }
 }
 
 struct AssistantModelGroup: Decodable, Sendable {
@@ -72,6 +76,7 @@ struct CodexAnswer: Decodable, Sendable {
     let effort: String
     let seconds: Double
     var sessionID: String? = nil
+    var pending: Bool? = nil
 }
 
 struct ChatTurn: Sendable {
@@ -82,13 +87,14 @@ struct ChatTurn: Sendable {
 }
 
 struct AssistantConversation {
+    private(set) var id = UUID().uuidString
     private(set) var turns: [ChatTurn] = []
     private var startedAt: Date?
 
     @discardableResult
     mutating func update(for snapshot: AssistantSnapshot) -> Bool {
         guard let start = snapshot.startedAt, start != startedAt else { return false }
-        turns = []
+        clear()
         startedAt = start
         return true
     }
@@ -98,7 +104,7 @@ struct AssistantConversation {
         turns = Array(turns.suffix(6))
     }
 
-    mutating func clear() { turns = [] }
+    mutating func clear() { turns = []; id = UUID().uuidString }
 }
 
 enum CodexError: LocalizedError {
@@ -117,6 +123,9 @@ final class CodexAsk: @unchecked Sendable {
     private let host: String
     private let script: String
     private var ai: [String: [String: String]]
+    private var selectionID = UUID().uuidString
+    private let defaultConversationID = UUID().uuidString
+    var choiceRevision: String { lock.withLock { selectionID } }
     private let lock = NSLock()
     private var process: Process?
 
@@ -136,7 +145,7 @@ final class CodexAsk: @unchecked Sendable {
 
     static func request(_ mode: CodexMode, question: String, snapshot: AssistantSnapshot,
                         history: [ChatTurn] = [], images: [ChatImage] = [], requestID: String? = nil,
-                        target: AnalysisTarget? = nil) -> [String: Any] {
+                        target: AnalysisTarget? = nil, conversationID: String? = nil) -> [String: Any] {
         let since = mode == .asked ? max(0, snapshot.elapsed - recentSeconds) : 0
         var request: [String: Any] = ["mode": mode.rawValue,
                        "question": question,
@@ -157,15 +166,17 @@ final class CodexAsk: @unchecked Sendable {
             } + current.map(\.payload)
         }
         if let requestID { request["requestID"] = requestID }
+        if let conversationID { request["conversationID"] = conversationID }
         if mode == .analysis, let target { request["target"] = target.payload }
         return request
     }
 
     func ask(_ mode: CodexMode, question: String = "", snapshot: AssistantSnapshot,
              history: [ChatTurn] = [], images: [ChatImage] = [], requestID: String? = nil,
-             target: AnalysisTarget? = nil) async throws -> CodexAnswer {
+             target: AnalysisTarget? = nil, conversationID: String? = nil) async throws -> CodexAnswer {
         let request = Self.request(mode, question: question, snapshot: snapshot, history: history,
-                                   images: images, requestID: requestID, target: target)
+                                   images: images, requestID: requestID ?? UUID().uuidString, target: target,
+                                   conversationID: conversationID ?? defaultConversationID)
         let output = try await call(request)
         do {
             return try JSONDecoder().decode(CodexAnswer.self, from: output)
@@ -201,6 +212,8 @@ final class CodexAsk: @unchecked Sendable {
                           in ai: [String: [String: String]]) -> [String: [String: String]] {
         var updated = ai
         updated[task, default: [:]]["model"] = model.id
+        if let provider = model.provider { updated[task, default: [:]]["provider"] = provider }
+        if let account = model.account { updated[task, default: [:]]["account"] = account }
         let current = ai[task]?["effort"] ?? (task == "analysis" ? "high" : "low")
         if !model.efforts.isEmpty, !model.efforts.contains(current) {
             updated[task, default: [:]]["effort"] = model.efforts.contains("medium") ? "medium" : model.efforts[0]
@@ -219,17 +232,23 @@ final class CodexAsk: @unchecked Sendable {
         }
         var saved = config["ai"] as? [String: [String: String]] ?? [:]
         saved[task, default: [:]]["model"] = model.id
+        if let provider = model.provider { saved[task, default: [:]]["provider"] = provider }
+        if let account = model.account { saved[task, default: [:]]["account"] = account }
         if let effort = updated[task]?["effort"] { saved[task, default: [:]]["effort"] = effort }
         config["ai"] = saved
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
             .write(to: file, options: .atomic)
-        lock.withLock { ai = updated }
+        lock.withLock {
+            ai = updated
+            if task == "chat" { selectionID = UUID().uuidString }
+        }
     }
 
     private func call(_ body: [String: Any]) async throws -> Data {
         var request = body
         request["ai"] = lock.withLock { ai }
+        request["selectionID"] = choiceRevision
         let input = try JSONSerialization.data(withJSONObject: request)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")

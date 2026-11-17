@@ -69,12 +69,13 @@ Mitschrift reads `~/.config/mitschrift/config.json`. Missing fields use defaults
 
 | Field | Applies to | Meaning |
 | --- | --- | --- |
-| `provider` | all | `codex` or `ollama`. `analysis` only supports `pandaos`. |
+| `provider` | all | `codex` or `ollama`; `chat` additionally supports `pandaos`. `analysis` only supports `pandaos`. |
 | `account` | `codex` | Codex login on the host: `business` uses `~/.codex-business`, `default` uses `~/.codex`, or give an absolute path. Each folder carries its own subscription. |
-| `account` | `analysis` | PandaOS or Paseo provider ID, such as `codex-business`. |
+| `account` | `pandaos` | PandaOS or Paseo provider ID, such as `codex-business`. |
 | `model` | all | Model name for that provider. |
-| `effort` | `codex`, `analysis` | Reasoning effort, such as `low`, `medium`, or `high`. |
+| `effort` | `codex`, `pandaos` | Reasoning effort, such as `low`, `medium`, or `high`. |
 | `url` | `ollama` | Ollama server as seen from the host. Default `http://localhost:11434`. |
+| `workspace` | `pandaos` | Existing PandaOS workspace ID for chat sessions and default new analyses. |
 | `context` | `ollama` | Context size in tokens. Default `16384`. |
 
 Ollama has no file access. Chat through Ollama answers from the transcript, screen text, and chat only, without the vault.
@@ -88,7 +89,7 @@ Ollama has no file access. Chat through Ollama answers from the transcript, scre
 }
 ```
 
-The chat model menu selects the model for the next message and saves it in `ai.chat`. While composing `/analyse`, the same menu selects `ai.analysis`; an existing destination session keeps its own model. Available choices come from the configured Codex account cache, Ollama model list, or PandaOS provider. Discovery failure retains the current model. Selecting a model keeps provider/account and unrelated configuration fields. The chat panel and `mitschrift ask` show the account, model, and effort that answered. Executable paths, the vault pointer, and prompts remain source-level settings. The [integration guide](integration.md) identifies each one.
+The chat model menu lists all available PandaOS profiles and selectable models, grouped by account. Selecting one saves provider `pandaos`, the account ID and model in `ai.chat`, or `ai.analysis` while composing `/analyse`. A persistent PandaOS chat retains context when accounts or models change; an existing analysis destination keeps its own model. Unrelated configuration fields remain intact. The reply identifies the account, model and effort that actually answered. Executable paths, vault pointer and prompts remain source-level settings; see the [integration guide](integration.md).
 
 ## Recovery, screenshots, and speakers
 

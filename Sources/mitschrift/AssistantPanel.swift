@@ -43,13 +43,16 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     private let cancelButton = NSButton(title: "Abbrechen", target: nil, action: nil)
     private let clearButton = NSButton(title: "Neuer Chat", target: nil, action: nil)
     private let copyButton = NSButton(title: "Antwort kopieren", target: nil, action: nil)
-    private let analysisButton = NSButton(title: "Analyse in PandaOS öffnen", target: nil, action: nil)
+    private let analysisButton = NSButton(title: "In PandaOS öffnen", target: nil, action: nil)
     private let targetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private var targetsLoadedAt: Date?
     private var loadingTargets = false
     private var analysisSessionID: String?
     private var analysisRequestKey = ""
     private var analysisRequestID: String?
+    private var chatRequestKey = ""
+    private var chatRequestID: String?
+    private var chatSnapshot: AssistantSnapshot?
     private let status = NSTextField(labelWithString: "")
     private let answerView = ChatTextView.reader()
     private let answerScroll = NSScrollView()
@@ -338,13 +341,16 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         guard !loadingModels, modelsLoadedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true else { return }
         loadingModels = true
         modelLoadFailed = false
+        let previousSelection = selectedModels
         updateModelMenu()
         Task { @MainActor in
             defer { loadingModels = false; updateModelMenu() }
             do {
                 let models = try await codex.models()
                 modelGroups = models
-                selectedModels = ["chat": codex.modelID(for: "chat"), "analysis": codex.modelID(for: "analysis")]
+                for (task, group) in [("chat", models.chat), ("analysis", models.analysis)] where selectedModels[task] == previousSelection[task] {
+                    selectedModels[task] = group.current
+                }
                 modelsLoadedAt = Date()
             } catch {
                 modelLoadFailed = true
@@ -358,20 +364,25 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         let selected = selectedModels[task] ?? group?.current
         let session = task == "analysis" && selectedTarget?.kind == "session"
         let title = session ? "Modell der Session" :
-            group?.models.first(where: { $0.id == selected })?.title ?? selected ??
+            group?.models.first(where: { $0.choiceID == selected })?.title ?? selected ??
             (task == "analysis" ? "Analyse-Modell" : "Chat-Modell")
         let menu = NSMenu()
         menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
         if let group {
-            menu.addItem(NSMenuItem.sectionHeader(title: "\(group.provider) / \(group.account)"))
+            var account: String?
             for model in group.models {
+                let heading = model.accountTitle ?? model.account ?? "\(group.provider) / \(group.account)"
+                if account != heading {
+                    menu.addItem(NSMenuItem.sectionHeader(title: heading))
+                    account = heading
+                }
                 let item = NSMenuItem(title: model.title, action: nil, keyEquivalent: "")
                 item.representedObject = model
-                item.state = model.id == selected ? .on : .off
+                item.state = model.choiceID == selected ? .on : .off
                 menu.addItem(item)
             }
             modelPopup.toolTip = session ? "Die bestehende Session behält ihr Modell." :
-                "\(group.provider), Konto \(group.account). Gilt für die nächste Nachricht."
+                "PandaOS, Konto \(group.models.first(where: { $0.choiceID == selected })?.accountTitle ?? group.account). Gilt für die nächste Nachricht."
         } else {
             let item = NSMenuItem(title: modelLoadFailed ? "Modelle nicht abrufbar" : "Modelle werden geladen …",
                                  action: nil, keyEquivalent: "")
@@ -401,7 +412,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         guard let model = sender.selectedItem?.representedObject as? AssistantModel else { return }
         do {
             try codex.select(model, task: modelTask, file: configFile)
-            selectedModels[modelTask] = model.id
+            selectedModels[modelTask] = model.choiceID
             status.stringValue = "\(model.title) für die nächste \(modelTask == "analysis" ? "Analyse" : "Chatnachricht")."
         } catch {
             status.stringValue = "Modell nicht geändert: \(error.localizedDescription)"
@@ -620,27 +631,36 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         let started = Date()
         ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                let state = mode == .analysis ? "PandaOS startet die Analyse" : "Codex denkt nach"
+                let state = mode == .analysis ? "PandaOS startet die Analyse" : "Antwort wird vorbereitet"
                 self?.status.stringValue = "\(state), \(Int(Date().timeIntervalSince(started))) s …"
             }
         }
-        status.stringValue = mode == .analysis ? "Analyse wird in PandaOS gestartet …" : "Codex denkt nach …"
+        status.stringValue = mode == .analysis ? "Analyse wird in PandaOS gestartet …" : "Antwort wird vorbereitet …"
         task = Task { @MainActor in
             let current = await snapshot()
             let analysisTarget = selectedTarget
             if conversation.update(for: current) { SharedChat.clear() }
             pendingQuestion = title
             pendingImages = mode == .asked ? [] : draftImages
+            if mode == .question {
+                let key = conversation.id + question + pendingImages.map { $0.id.uuidString }.joined() + codex.choiceRevision
+                if chatRequestID == nil || chatRequestKey != key {
+                    chatRequestKey = key
+                    chatRequestID = UUID().uuidString
+                    chatSnapshot = current
+                }
+            }
             render()
             do {
                 try Task.checkCancellation()
                 guard current.recording || mode != .asked else {
                     throw CodexError.failed("Gerade läuft keine Aufnahme, es gibt kein Transkript.")
                 }
-                let reply = try await codex.ask(mode, question: question, snapshot: current,
+                let reply = try await codex.ask(mode, question: question, snapshot: mode == .question ? (chatSnapshot ?? current) : current,
                                                 history: conversation.turns, images: pendingImages,
-                                                requestID: mode == .analysis ? analysisRequestID : nil,
-                                                target: mode == .analysis ? analysisTarget : nil)
+                                                requestID: mode == .analysis ? analysisRequestID : chatRequestID,
+                                                target: mode == .analysis ? analysisTarget : nil,
+                                                conversationID: conversation.id)
                 try Task.checkCancellation()
                 if let sessionID = reply.sessionID {
                     analysisSessionID = sessionID
@@ -651,21 +671,27 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                     conversation.update(for: latest)
                     throw CodexError.failed("Neue Aufnahme gestartet. Bitte sende die Frage erneut.")
                 }
-                if mode != .asked {
+                if mode != .asked && reply.pending != true {
                     query.string = ""
                     query.didChangeText()
                     draftImages = []
                     renderPreviews()
                     analysisRequestID = nil
+                    chatRequestID = nil
+                    chatSnapshot = nil
                 }
-                status.stringValue = "\(reply.account), \(reply.model) (\(reply.effort)), \(Int(reply.seconds.rounded())) s"
-                conversation.append(question: title, answer: reply.answer, images: pendingImages,
-                                    model: mode == .analysis ? "PandaOS" : reply.model)
+                status.stringValue = reply.pending == true ? reply.answer :
+                    "\(reply.account), \(reply.model) (\(reply.effort)), \(Int(reply.seconds.rounded())) s"
+                status.toolTip = reply.pending == true ? reply.answer : nil
+                if reply.pending != true {
+                    conversation.append(question: title, answer: reply.answer, images: pendingImages,
+                                        model: mode == .analysis ? "PandaOS" : reply.model)
+                }
                 SharedChat.write(conversation.turns, recordingID: current.recordingID)
             } catch is CancellationError {
                 status.stringValue = mode == .analysis
                     ? "Abgebrochen. Eine Analyse kann bereits in PandaOS laufen."
-                    : "Abgebrochen."
+                    : "Warten beendet. Eine PandaOS-Anfrage kann dort weiterlaufen."
             } catch {
                 status.stringValue = "Fehler: \(error.localizedDescription)"
             }

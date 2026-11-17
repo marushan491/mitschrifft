@@ -31,7 +31,7 @@ The current app interface and assistant prompts are in German. Recognition defau
 | Transcription | Apple SpeechAnalyzer processes audio on the Mac. Separate microphone and system tracks distinguish you from other participants. |
 | Speaker separation | FluidAudio runs locally. Its model downloads from Hugging Face on first use. Labels identify voices, without establishing people's names. |
 | Transcript cleanup | **Enabled by default.** After a recording, the transcript text goes over SSH through the assistant bridge on `structureHost`, by default to Codex `gpt-6-luna`. `ai.cleanup` selects another model or Ollama. Set `structureEnabled` to `false` to skip this step. |
-| Chat | Only an explicit send transfers context to the SSH bridge and Codex provider. The prompt asks Codex to read relevant vault notes. Its read-only sandbox does not confine reads to that vault. |
+| Chat | An explicit send transfers context to the selected provider. Choosing a PandaOS profile creates a persistent PandaOS chat with that profile’s normal permissions and account routing. Direct Codex keeps its read-only sandbox; Ollama receives only supplied context. |
 | Images and video | Meeting screenshots are retained by default through `keepScreenshots`. Video starts from its own control. Chat attachments are previewed before you send them. |
 
 `/analyse` transfers context into a persistent agent session. Its transcript excerpts, conversation history, and images follow the host's session storage and retention rules. Manage that session in PandaOS or Paseo; clearing Mitschrift's chat does not delete it.
@@ -79,9 +79,9 @@ The default notes folder is `50 Resources/Transkripte` inside the configured vau
 
 The [setup guide](docs/integration.md) covers your SSH host, Codex login, vault, CLI path, provider, and analysis workspace. Upstream Paseo supports the session commands used by the bridge. Paths and provider settings need source edits; there is currently no in-app connection wizard.
 
-Normal chat uses an ephemeral, read-only `codex exec` call. It does not create an agent session. The default model is `gpt-6-luna` with `low` reasoning effort. Cleanup, the recent-question shortcut, chat, and `/analyse` each take their own provider, account, model, and effort through the `ai` config; Ollama is available for all but `/analyse`. See [Choose the AI for each task](docs/reference.md#choose-the-ai-for-each-task).
+Direct Codex chat uses an ephemeral, read-only `codex exec` call. PandaOS chat uses a persistent session with the selected provider’s normal permissions, so explicitly requested tasks can run there. The default model is `gpt-6-luna` with `low` reasoning effort. Cleanup, the recent-question shortcut, chat, and `/analyse` each take their own provider, account, model, and effort through the `ai` config; Ollama is available for all but `/analyse`. See [Choose the AI for each task](docs/reference.md#choose-the-ai-for-each-task).
 
-The model menu beside the message selects the model for your next chat reply. With `/analyse`, it switches to the analysis model; an existing destination session keeps its own model. Provider and account stay unchanged.
+The model menu beside the message lists available PandaOS profiles and their models, grouped by account. Selecting one saves `provider: pandaos`, its account ID and model. Normal chat replies return inline from a persistent PandaOS session; switching profiles retains that session and its context. A daemon account rotation is retained until you change the selection again. With `/analyse`, the menu selects the analysis profile; an existing destination session keeps its own model.
 
 Typing `/` in the chat lists the commands with a short description; Tab completes a started command and `/help` shows them all.
 
@@ -101,7 +101,7 @@ The **Open analysis in PandaOS** action relies on a PandaOS-specific tab request
 
 Chat receives up to 32,000 characters of recent transcript and six recent question-answer pairs. Truncation preserves complete lines and marks missing earlier context. Up to four recent images accompany a request, with current attachments taking priority. Images are normalized locally to at most 1600 pixels and JPEGs under 2 MB.
 
-Normal chat history stays in Mitschrift's memory. A new chat, a new recording, or an app restart clears it. A new chat also clears the draft. Temporary bridge images are removed after the request; this does not erase inputs retained by the model provider or an independent analysis session.
+Mitschrift retains six recent turns in memory. A new chat, recording, or app restart clears that local history and starts a new PandaOS chat binding. Existing PandaOS sessions and provider-retained inputs remain until managed there; clearing Mitschrift does not erase them. Temporary bridge images are removed after the request. “In PandaOS öffnen” opens the current session. Cancelling the wait or closing the window does not stop an already running PandaOS task. If permission, a provider wait, or exhausted quotas block a reply, Mitschrift retains the draft and exposes the session; continue there or select another account. PandaOS controls available quota rotations; this bridge does not invent or guarantee an unlimited fallback.
 
 ## Recording behavior and limits
 
