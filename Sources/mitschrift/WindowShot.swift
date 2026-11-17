@@ -19,7 +19,7 @@ enum WindowShot {
         let candidates = content.windows.filter { window in
             guard let owner = window.owningApplication?.applicationName else { return false }
             guard names.contains(where: { owner.localizedCaseInsensitiveContains($0) }) else { return false }
-            guard window.frame.width > 320, window.frame.height > 240 else { return false }
+            guard window.windowLayer == 0, window.frame.width > 320, window.frame.height > 240 else { return false }
             let title = window.title ?? ""
             return !ignoredTitles.contains { title.localizedCaseInsensitiveContains($0) }
         }
@@ -34,8 +34,8 @@ enum WindowShot {
         }
 
         if let chosen = ranked.first {
-            log("Fensterwahl: \(chosen.owningApplication?.applicationName ?? "?") / \(chosen.title ?? "ohne Titel")"
-                + " aus \(candidates.count) Kandidaten")
+            let titles = ranked.map { "\($0.owningApplication?.applicationName ?? "?") / \($0.title ?? "ohne Titel")" }
+            log("Fensterwahl: \(titles.joined(separator: " ; "))")
             return chosen
         }
         return nil
@@ -54,17 +54,20 @@ enum WindowShot {
     }
 
     static func clean(_ raw: String?) -> String? {
-        guard var title = raw?.trimmingCharacters(in: .whitespaces), !title.isEmpty else { return nil }
+        let title = (raw ?? "").replacingOccurrences(of: "\u{200E}", with: "").trimmingCharacters(in: .whitespaces)
+        guard !title.isEmpty, !title.hasSuffix(" - Slack"), !title.contains(" - Slack ") else { return nil }
 
         let appSuffixes = ["Microsoft Teams", "Slack", "Zoom", "Zoom Workplace", "Webex", "Discord"]
-        var parts = title.components(separatedBy: " | ").map { $0.trimmingCharacters(in: .whitespaces) }
-        parts.removeAll { part in appSuffixes.contains { part.caseInsensitiveCompare($0) == .orderedSame } }
-        let noise = ["besprechung beitreten", "join meeting", "meeting", "besprechung"]
-        parts.removeAll { part in noise.contains { part.caseInsensitiveCompare($0) == .orderedSame } }
-        guard let best = parts.max(by: { $0.count < $1.count }) else { return nil }
-        title = best
-        guard title.count > 2 else { return nil }
-        return title
+        let noise = ["besprechung beitreten", "join meeting", "meeting", "besprechung", "window"]
+        let parts = title.components(separatedBy: " | ")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { part in
+                !part.contains("@")
+                    && !appSuffixes.contains { part.caseInsensitiveCompare($0) == .orderedSame }
+                    && !noise.contains { part.caseInsensitiveCompare($0) == .orderedSame }
+            }
+        guard let first = parts.first, first.count > 2 else { return nil }
+        return first
     }
 
     static func capture(_ window: SCWindow) async throws -> CGImage {

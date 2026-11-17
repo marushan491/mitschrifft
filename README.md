@@ -30,7 +30,7 @@ The current app interface and assistant prompts are in German. Recognition defau
 | --- | --- |
 | Transcription | Apple SpeechAnalyzer processes audio on the Mac. Separate microphone and system tracks distinguish you from other participants. |
 | Speaker separation | FluidAudio runs locally. Its model downloads from Hugging Face on first use. Labels identify voices, without establishing people's names. |
-| Transcript cleanup | **Enabled by default.** After a recording, the transcript text goes over SSH through the assistant bridge on `structureHost`, by default to Codex `gpt-6-luna`. `ai.cleanup` selects another model or Ollama. Set `structureEnabled` to `false` to skip this step. |
+| Transcript cleanup | **Enabled by default.** After a recording, the transcript text goes over SSH through the assistant bridge on `structureHost`, by default to Codex `gpt-6-luna`. OCR text of the meeting window, captured during the recording, goes the same way to fill the `teilnehmer` property. `ai.cleanup` selects another model or Ollama. Set `structureEnabled` to `false` to skip this step. |
 | Chat | An explicit send transfers context to the selected provider. Choosing a PandaOS profile creates a persistent PandaOS chat with that profile’s normal permissions and account routing. Direct Codex keeps its read-only sandbox; Ollama receives only supplied context. |
 | Images and video | Meeting screenshots are retained by default through `keepScreenshots`. Video starts from its own control. Chat attachments are previewed before you send them. |
 
