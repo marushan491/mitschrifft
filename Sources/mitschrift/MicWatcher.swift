@@ -64,15 +64,25 @@ enum AudioProcesses {
     }
 
     private static func appName(for pid: pid_t) -> String {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let path = proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 ? String(cString: buffer) : nil
+        if let path, let bundle = outermostApp(inPath: path) {
+            return bundle
+        }
         if let app = NSRunningApplication(processIdentifier: pid),
            let name = app.localizedName ?? app.bundleIdentifier {
             return name
         }
-        var buffer = [CChar](repeating: 0, count: 4096)
-        if proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 {
-            return URL(fileURLWithPath: String(cString: buffer)).lastPathComponent
+        if let path {
+            return URL(fileURLWithPath: path).lastPathComponent
         }
         return "PID \(pid)"
+    }
+
+    static func outermostApp(inPath path: String) -> String? {
+        guard let component = path.split(separator: "/").first(where: { $0.hasSuffix(".app") }) else { return nil }
+        let name = component.dropLast(4).trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? nil : name
     }
 }
 

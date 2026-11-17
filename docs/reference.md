@@ -62,7 +62,7 @@ Mitschrift reads `~/.config/mitschrift/config.json`. Missing fields use defaults
 
 | Task | Used for | Default |
 | --- | --- | --- |
-| `cleanup` | The `## Struktur` section after a recording | Codex, account `business`, `gpt-6-luna`, effort `low` |
+| `cleanup` | The `## Struktur` section and the `teilnehmer` property after a recording | Codex, account `business`, `gpt-6-luna`, effort `low` |
 | `live` | The recent-question shortcut | Codex, account `business`, `gpt-6-luna`, effort `low` |
 | `chat` | Typed questions and follow-ups | Codex, account `business`, `gpt-6-luna`, effort `low` |
 | `analysis` | `/analyse` sessions | PandaOS, provider `codex-business`, `gpt-6.1-sol`, thinking `high` |
@@ -94,6 +94,8 @@ The chat model menu lists all available PandaOS profiles and selectable models, 
 ## Recovery, screenshots, and speakers
 
 Completed transcript segments are written immediately to JSONL recovery files. After an interrupted session, recovery writes the note and preserves completed video clips. Multiple clips in one meeting have distinct filenames and links.
+
+Note properties: `apps` names the app bundle (`Slack`, `Microsoft Teams`), not its helper process. `meeting` comes from the meeting window title; Slack titles only name the open channel and are not used. While recording, Mitschrift OCRs the meeting window 20 seconds after the start and then every 3 minutes without saving the image. After the recording, the `cleanup` model reads that text and fills `teilnehmer` from call tiles, participant lists and Slack huddle notices, and fills `meeting` if it was still `unbekannt`. `teilnehmer: []` means nobody was reliably visible. Run `mitschrift structure <note>` to fill the property for an older note from its `## Geteilter Bildschirm` section.
 
 The meeting screenshot shortcut captures the largest visible window among the configured meeting apps and detected apps. Local OCR adds its text to the note. `keepScreenshots = false` discards the image after processing; the OCR text remains.
 

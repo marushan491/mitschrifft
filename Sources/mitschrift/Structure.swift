@@ -7,13 +7,23 @@ struct Structure {
         Config.stateDirectory.appendingPathComponent("queue")
     }
 
-    func enqueue(note: URL) {
+    static func uniqueLines(_ texts: [String], limit: Int = 12_000) -> String {
+        var seen = Set<String>()
+        var lines: [String] = []
+        for line in texts.joined(separator: "\n").split(separator: "\n") {
+            let clean = line.trimmingCharacters(in: .whitespaces)
+            if clean.count > 1, seen.insert(clean).inserted { lines.append(clean) }
+        }
+        return String(lines.joined(separator: "\n").prefix(limit))
+    }
+
+    func enqueue(note: URL, roster: String = "") {
         guard config.structureEnabled else { return }
         do {
             try FileManager.default.createDirectory(at: queueDirectory, withIntermediateDirectories: true)
             let name = ISO8601DateFormatter.filenameSafe.string(from: Date())
                 .replacingOccurrences(of: ":", with: "-")
-            let job = ["note": note.path, "tries": "0"]
+            let job = ["note": note.path, "tries": "0", "roster": roster]
             let data = try JSONSerialization.data(withJSONObject: job)
             try data.write(to: queueDirectory.appendingPathComponent("\(name).json"))
         } catch {
@@ -54,12 +64,12 @@ struct Structure {
                 continue
             }
 
-            switch structure(note: note) {
+            switch structure(note: note, roster: job["roster"] ?? "") {
             case .success:
                 try? FileManager.default.removeItem(at: file)
             case .failure(let reason):
                 log("Struktur fuer \(note.lastPathComponent) vertagt: \(reason)")
-                let next = ["note": path, "tries": String(tries + 1)]
+                let next = ["note": path, "tries": String(tries + 1), "roster": job["roster"] ?? ""]
                 if let data = try? JSONSerialization.data(withJSONObject: next) {
                     try? data.write(to: file)
                 }
@@ -73,9 +83,16 @@ struct Structure {
         case failure(String)
     }
 
-    private func structure(note: URL) -> Outcome {
-        guard let text = try? String(contentsOf: note, encoding: .utf8) else {
+    private func structure(note: URL, roster: String) -> Outcome {
+        guard var text = try? String(contentsOf: note, encoding: .utf8) else {
             return .failure("Notiz nicht lesbar")
+        }
+        if Self.frontmatterValue("teilnehmer", in: text) == nil {
+            do {
+                text = try addParticipants(to: note, text: text, roster: roster)
+            } catch {
+                log("Teilnehmer fuer \(note.lastPathComponent) nicht bestimmt: \(error.localizedDescription)")
+            }
         }
         let transcript = spoken(in: text)
         guard transcript.count > 200 else { return .success }
@@ -97,6 +114,72 @@ struct Structure {
         } catch {
             return .failure(error.localizedDescription)
         }
+    }
+
+    private func addParticipants(to note: URL, text: String, roster: String) throws -> String {
+        let screen = roster.isEmpty ? Self.uniqueLines([screenSection(of: text)]) : roster
+        let found: Participants
+        if screen.isEmpty {
+            found = Participants(meeting: nil, participants: [])
+        } else {
+            let request: [String: Any] = ["mode": "participants",
+                                          "screen": screen,
+                                          "meeting": Self.frontmatterValue("meeting", in: text) ?? "unbekannt",
+                                          "apps": Self.frontmatterValue("apps", in: text) ?? "",
+                                          "transcript": String(spoken(in: text).prefix(6000)),
+                                          "ai": config.ai]
+            let payload = try JSONSerialization.data(withJSONObject: request)
+            found = try Participants.parse(try ask(payload: payload).answer)
+        }
+        let updated = Self.withParticipants(found, in: text)
+        try updated.write(to: note, atomically: true, encoding: .utf8)
+        log("Teilnehmer fuer \(note.lastPathComponent): \(found.participants.isEmpty ? "keine erkannt" : found.participants.joined(separator: ", "))")
+        return updated
+    }
+
+    private func screenSection(of text: String) -> String {
+        guard let start = text.range(of: "\n## Geteilter Bildschirm") else { return "" }
+        return text[start.upperBound...].split(separator: "\n")
+            .filter { !$0.hasPrefix("![[") && !$0.hasPrefix("### ") }
+            .joined(separator: "\n")
+    }
+
+    static func frontmatterValue(_ key: String, in text: String) -> String? {
+        guard text.hasPrefix("---\n"), let end = text.range(of: "\n---", range: text.index(text.startIndex, offsetBy: 4)..<text.endIndex)
+        else { return nil }
+        for line in text[text.index(text.startIndex, offsetBy: 4)..<end.lowerBound].split(separator: "\n")
+        where line.hasPrefix("\(key):") {
+            var value = line.dropFirst(key.count + 1).trimmingCharacters(in: .whitespaces)
+            if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") { value = String(value.dropFirst().dropLast()) }
+            return value
+        }
+        return nil
+    }
+
+    static func withParticipants(_ found: Participants, in text: String) -> String {
+        guard text.hasPrefix("---\n"),
+              let end = text.range(of: "\n---", range: text.index(text.startIndex, offsetBy: 4)..<text.endIndex)
+        else { return text }
+        var lines = text[text.index(text.startIndex, offsetBy: 4)..<end.lowerBound]
+            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        lines.removeAll { $0.hasPrefix("teilnehmer:") }
+        let list = "teilnehmer: [" + found.participants.map(yaml).joined(separator: ", ") + "]"
+        if let index = lines.firstIndex(where: { $0.hasPrefix("meeting:") }) {
+            if lines[index] == "meeting: unbekannt", let meeting = found.meeting {
+                lines[index] = "meeting: " + yaml(meeting)
+            }
+            lines.insert(list, at: index + 1)
+        } else {
+            lines.append(list)
+        }
+        return "---\n" + lines.joined(separator: "\n") + text[end.lowerBound...]
+    }
+
+    private static func yaml(_ value: String) -> String {
+        let flat = value.replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"" + flat + "\""
     }
 
     private func ask(payload: Data) throws -> CodexAnswer {
@@ -175,5 +258,25 @@ struct Structure {
             body += "\n\n" + block
         }
         try body.write(to: note, atomically: true, encoding: .utf8)
+    }
+}
+
+struct Participants: Decodable, Equatable {
+    let meeting: String?
+    let participants: [String]
+
+    static func parse(_ answer: String) throws -> Participants {
+        guard let start = answer.firstIndex(of: "{"), let end = answer.lastIndex(of: "}"),
+              let data = String(answer[start...end]).data(using: .utf8),
+              let raw = try? JSONDecoder().decode(Participants.self, from: data)
+        else { throw CodexError.failed("Teilnehmerantwort unlesbar") }
+        let names = raw.participants
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { (2...80).contains($0.count) }
+            .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        let meeting = raw.meeting
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.count > 2 && $0 != "unbekannt" ? String($0.prefix(120)) : nil }
+        return Participants(meeting: meeting, participants: Array(names.prefix(30)))
     }
 }

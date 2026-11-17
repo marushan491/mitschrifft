@@ -38,6 +38,8 @@ final class Supervisor {
     private var silentSeconds = 0
     private var lastResultCount = 0
     private(set) var meetingTitle: String?
+    private var nextWindowLook: Date?
+    private var windowTexts: [String] = []
     private(set) var detectedApps: [String] = []
 
     private let tick = 2
@@ -231,7 +233,7 @@ final class Supervisor {
 
     private func step() async {
         let seen = session == nil ? detector.startCandidates() : detector.stillTalking()
-        detectedApps = seen.map(\.name)
+        detectedApps = seen.map(\.name).reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
         seenTicks = detectedApps.isEmpty ? 0 : seenTicks + 1
         ticks += 1
         let names = detectedApps.sorted().joined(separator: ", ")
@@ -273,6 +275,10 @@ final class Supervisor {
             }
         } else {
             let users = seen
+            if let next = nextWindowLook, Date() >= next {
+                nextWindowLook = Date().addingTimeInterval(180)
+                await lookAtWindow()
+            }
             if ticks % 10 == 0, let session {
                 log("Aufnahme laeuft: \(await session.healthLine())")
             }
@@ -331,6 +337,8 @@ final class Supervisor {
             silentSeconds = 0
             lastResultCount = 0
             lastError = nil
+            windowTexts = []
+            nextWindowLook = Date().addingTimeInterval(20)
             await noteMeetingTitle(sink: newSink, apps: apps)
             if withVideo { await startVideo(sink: newSink, apps: apps) }
         } catch {
@@ -402,6 +410,21 @@ final class Supervisor {
         }
     }
 
+    private func lookAtWindow() async {
+        guard let sink, let window = try? await conferenceWindow() else { return }
+        if meetingTitle == nil, let title = WindowShot.clean(window.title) {
+            meetingTitle = title
+            sink.noteMeeting(title)
+            log("Termin nachtraeglich erkannt als: \(title)")
+        }
+        guard let image = try? await WindowShot.capture(window) else { return }
+        let text = await WindowShot.readText(from: image, locale: config.locale)
+        guard !text.isEmpty else { return }
+        windowTexts.append("Fenster: \(window.title ?? "ohne Titel")\n\(text)")
+        if windowTexts.count > 8 { windowTexts.removeFirst() }
+        log("Teilnehmerblick: \(text.split(separator: "\n").count) Zeilen aus \(window.owningApplication?.applicationName ?? "?")")
+    }
+
     private func conferenceWindow() async throws -> SCWindow? {
         if !recordingApps.isEmpty,
            let own = try await WindowShot.meetingWindow(matching: recordingApps) {
@@ -442,6 +465,9 @@ final class Supervisor {
         idleSeconds = 0
         let title = meetingTitle
         meetingTitle = nil
+        nextWindowLook = nil
+        let roster = Structure.uniqueLines(windowTexts + screens.map(\.text))
+        windowTexts = []
 
         let recorder = video
         video = nil
@@ -488,7 +514,7 @@ final class Supervisor {
             notesToday += 1
             log("Notiz geschrieben: \(url.path)")
             let structure = Structure(config: config)
-            structure.enqueue(note: url)
+            structure.enqueue(note: url, roster: roster)
             Task.detached(priority: .background) { structure.drain() }
         } catch {
             lastError = error.localizedDescription
