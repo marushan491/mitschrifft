@@ -44,6 +44,45 @@ final class MeetingTests: XCTestCase {
         XCTAssertFalse(MeetingText.lines(cleaned).contains("Ich:"))
     }
 
+    func testLoudspeakerPickupIsNotAttributedToMe() {
+        var segments: [Segment] = []
+        let lines = ["Wir starten mit der Weboberfläche und testen danach die Ablösung",
+                     "Die Datenbank bleibt in der ersten Stufe unverändert bestehen",
+                     "Dann klären wir die Umgebung mit dem Rechenzentrum der Kunden",
+                     "Das Lieferartefakt müssen wir noch gemeinsam abstimmen"]
+        for (index, line) in lines.enumerated() {
+            let start = Double(index) * 20
+            segments += [system(start, start + 10, line), mic(start + 0.5, start + 10, line)]
+        }
+        segments += [system(80, 88, "das passt so weit"),
+                     mic(80, 88, "Meine Annahme ist das passt so weit, nee genau so"),
+                     system(95, 97, "Ja."),
+                     mic(95, 97, "Ja,"),
+                     mic(120, 130, "Bis Mitte Dezember brauchen wir das auf Papier")]
+        let cleaned = Echo.removeMicEcho(segments)
+        XCTAssertFalse(MeetingText.lines(cleaned).contains("Ich:"))
+        let pickup = cleaned.filter { $0.track == .mic }
+        XCTAssertEqual(pickup.map(\.text), ["Meine Annahme ist … nee genau so",
+                                            "Bis Mitte Dezember brauchen wir das auf Papier"])
+        XCTAssertEqual(pickup.map { Speakers.name($0) }, ["Mikrofon (unsicher)", "Mikrofon (unsicher)"])
+    }
+
+    func testOwnSpeechWithHeadsetStaysMine() {
+        let segments = [
+            system(0, 5, "Wie sieht es mit dem Termin aus"),
+            mic(6, 10, "Ich schaffe den Termin bis Freitag"),
+            system(11, 15, "Gut, und die Tests?"),
+            mic(16, 20, "Die Tests laufen schon seit gestern"),
+            system(21, 25, "Prima, dann machen wir das so"),
+            mic(26, 30, "Genau, dann machen wir das so und ich schreibe die Notiz"),
+            mic(31, 34, "Ja")
+        ]
+        let mine = Echo.removeMicEcho(segments).filter { $0.track == .mic }
+        XCTAssertEqual(mine.map { Speakers.name($0) }, ["Ich", "Ich", "Ich", "Ich"])
+        XCTAssertEqual(mine.map(\.text), ["Ich schaffe den Termin bis Freitag", "laufen schon seit gestern",
+                                          "und ich schreibe die Notiz", "Ja"])
+    }
+
     func testSpeakersAreNumberedInOrderOfAppearance() {
         let spans = [SpeakerSpan(speaker: 4, start: 0, end: 10), SpeakerSpan(speaker: 1, start: 10, end: 20)]
         let labelled = Speakers.label([system(1, 9, "a"), mic(9, 11, "b"), system(11, 19, "c"), system(2, 3, "d")], spans: spans)

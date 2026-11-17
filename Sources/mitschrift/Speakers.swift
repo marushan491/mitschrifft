@@ -95,8 +95,10 @@ actor SpeakerTracker {
 }
 
 enum Speakers {
+    static let uncertainMic = "Mikrofon (unsicher)"
+
     static func name(_ segment: Segment, me: String = "Ich", others: String = "Andere") -> String {
-        if segment.track == .mic { return me }
+        if segment.track == .mic { return segment.uncertain ? uncertainMic : me }
         return segment.speaker.map { "Sprecher \($0)" } ?? others
     }
 

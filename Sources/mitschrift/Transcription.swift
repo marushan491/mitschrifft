@@ -29,6 +29,7 @@ struct Segment: Sendable {
     let end: TimeInterval
     let text: String
     var speaker: Int? = nil
+    var uncertain = false
 }
 
 final class SegmentStore: @unchecked Sendable {

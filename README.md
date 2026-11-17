@@ -107,7 +107,7 @@ Mitschrift retains six recent turns in memory. A new chat, recording, or app res
 
 Mitschrift starts after another app uses the microphone for the configured delay. Listed meeting apps can also trigger it through system audio, which covers muted or listen-only calls. Browsers are excluded from that output-trigger list by default. You can start manually, pause automation, save, or discard a session from the menu.
 
-The microphone track filters text that matches nearby system audio to reduce speaker echo. Voice separation falls back to a generic other-participants label if its model fails. Neither mechanism guarantees perfect transcription or identity attribution.
+The microphone track filters text that matches nearby system audio to reduce speaker echo. When the microphone mostly hears the loudspeakers, its leftover text is labelled `Mikrofon (unsicher)` instead of being attributed to you. Voice separation falls back to a generic other-participants label if its model fails. Neither mechanism guarantees perfect transcription or identity attribution.
 
 Screen sharing exclusion uses `sharingType = .none`, which Apple has deprecated. Verify the actual behavior in your meeting app before relying on the panda or assistant being hidden. The eye control hides both windows.
 

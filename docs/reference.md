@@ -97,7 +97,7 @@ Completed transcript segments are written immediately to JSONL recovery files. A
 
 The meeting screenshot shortcut captures the largest visible window among the configured meeting apps and detected apps. Local OCR adds its text to the note. `keepScreenshots = false` discards the image after processing; the OCR text remains.
 
-The echo filter compares microphone text with system audio within four seconds. A segment with at least 60% matching word pairs is removed from the microphone track. Other segments keep residual phrases of at least three words. Recovery files retain raw text; filtering applies to notes, the live view, and assistant context.
+The echo filter compares microphone text with system audio within four seconds. A segment with at least 60% matching word pairs is removed from the microphone track. Other segments keep residual phrases of at least three words. When at least half of the microphone segments within five minutes are removed this way, the microphone is treated as hearing the loudspeakers: single echoed words are removed too, and the remaining microphone text is labelled `Mikrofon (unsicher)` instead of `speakerMe`. Recovery files retain raw text; filtering applies to notes, the live view, and assistant context.
 
 FluidAudio 0.17.7 uses the LS-EEND `dihard2` model for up to ten voices in the other-participants track. The first run downloads the model into `~/Library/Application Support/FluidAudio`. If separation fails, the note retains the generic label. Voice numbers follow first appearance; a number is not evidence of a person's name.
 

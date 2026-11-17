@@ -33,6 +33,11 @@ WORKSPACE_ID = re.compile(r'wks_[0-9a-f]{8,32}')
 TARGET_LIMIT = 30
 
 SPEAKERS = """Sprecherzuordnung:
+- „Mikrofon (unsicher)“ markiert Mikrofontext aus Abschnitten, in denen das Mikrofon die Lautsprecher
+  mithört. Diese Zeilen können von anderen Teilnehmern stammen. Schreibe Marushan nur Aussagen mit dem
+  Label „Ich“ zu.
+- Auch „Ich“ kann Raum- oder Lautsprecherton sein. Sagt Marushan, dass er etwas nicht gesagt hat, gilt
+  das für diese Aussage: Schreib sie ihm nicht weiter zu und widersprich nicht.
 - Automatische Sprecherlabels sind Indizien und können sich irren, besonders bei Sprecherwechseln
   innerhalb eines Textsegments. Ein erwähntes Teammitglied muss nicht am Gespräch teilnehmen.
 - Eine Anrede wie „für dich, Silvia“ benennt die angesprochene Person, nicht die sprechende.
