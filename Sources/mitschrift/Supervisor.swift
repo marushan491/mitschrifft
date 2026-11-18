@@ -411,7 +411,8 @@ final class Supervisor {
     }
 
     private func lookAtWindow() async {
-        guard let sink, let window = try? await conferenceWindow() else { return }
+        guard let sink, !recordingApps.isEmpty,
+              let window = try? await WindowShot.meetingWindow(matching: recordingApps) else { return }
         if meetingTitle == nil, let title = WindowShot.clean(window.title) {
             meetingTitle = title
             sink.noteMeeting(title)
