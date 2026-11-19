@@ -29,6 +29,7 @@ struct Segment: Sendable {
     let end: TimeInterval
     let text: String
     var speaker: Int? = nil
+    var rawSpeaker: Int? = nil
     var speakerName: String? = nil
     var speakerNameUncertain = false
     var overlappingSpeakers = false
