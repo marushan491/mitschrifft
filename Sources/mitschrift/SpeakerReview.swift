@@ -1,7 +1,7 @@
 import Foundation
 
 struct SpeakerIdentity: Equatable, Sendable {
-    enum Source: Equatable, Sendable { case teams, manual, profile, transcript }
+    enum Source: Equatable, Sendable { case teams, manual, window, profile, transcript }
 
     let name: String
     let source: Source
@@ -71,6 +71,9 @@ struct SpeakerReview: Sendable {
                 segment.speakerIdentity = SpeakerIdentity(name: name, source: .manual)
             } else if let name = segment.speakerName {
                 segment.speakerIdentity = SpeakerIdentity(name: name, source: .teams)
+            } else if let hint = segment.speakerIdentity, hint.source == .window {
+                let names = captions[group, default: []]
+                if !names.isEmpty && names != [hint.name] { segment.speakerIdentity = nil }
             } else if !segment.overlappingSpeakers, captions[group, default: []].isEmpty {
                 segment.speakerIdentity = identity(for: raw)
             }
@@ -82,15 +85,25 @@ struct SpeakerReview: Sendable {
     func rows(for segments: [Segment]) -> [SpeakerReviewRow] {
         let captions = captionNames(in: segments)
         let numbers = displayNumbers(in: segments)
+        let tail = (segments.last?.end ?? 0) - 30
+        var observed: [Int: Set<String>] = [:]
+        for segment in segments where segment.end >= tail {
+            guard let index = segment.rawSpeaker, let identity = segment.speakerIdentity,
+                  identity.source == .window else { continue }
+            observed[representative(index), default: []].insert(identity.name)
+        }
         let mic = segments.contains(where: { $0.track == .mic && !$0.uncertain })
             ? [SpeakerReviewRow(id: -1, number: 0, identity: SpeakerIdentity(name: "Ich", source: .manual),
                                 conflictingCaptions: false, sampleCount: sampleCounts[-1, default: 0])]
             : []
         return mic + numbers.sorted(by: { $0.value < $1.value }).map { raw, number in
             let names = captions[raw, default: []]
+            let windowNames = observed[raw, default: []]
             let confirmation = manual[raw].map { SpeakerIdentity(name: $0, source: .manual) }
             let identity = confirmation ?? (names.count == 1 ? names.first.map {
                 SpeakerIdentity(name: $0, source: .teams)
+            } : nil) ?? (names.isEmpty && windowNames.count == 1 ? windowNames.first.map {
+                SpeakerIdentity(name: $0, source: .window)
             } : nil) ?? (names.isEmpty ? self.identity(for: raw) : nil)
             return SpeakerReviewRow(id: raw, number: number, identity: identity,
                                     conflictingCaptions: confirmation == nil && names.count > 1,

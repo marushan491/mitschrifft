@@ -31,6 +31,9 @@ actor RecordingSession {
     private var captionSink: SegmentSink?
     private var teamsCaptionsEnabled = false
     private var attribution = SpeakerAttribution()
+    private var windowSpeakerAttribution = WindowSpeakerAttribution()
+    private var speakerWindowApp: MeetingSpeakerApp?
+    private var speakerWindowTitle: String?
     private var review = SpeakerReview()
     private var voiceTask: Task<Void, Never>?
     private var participantNames: Set<String> = []
@@ -116,30 +119,46 @@ actor RecordingSession {
 
     private func markStreamStopped() { streamStopped = true }
 
-    func enableTeamsCaptions(locale: String, sink: SegmentSink) {
-        guard !teamsCaptionsEnabled else { return }
-        teamsCaptionsEnabled = true
-        captionSink = sink
-        let reader = TeamsCaptionReader()
+    func setMeetingSpeakerSource(apps: [String], locale: String, title: String?, sink: SegmentSink) {
+        let supported = Set(apps.compactMap(MeetingSpeakerApp.init(appName:)))
+        let app = supported.count == 1 ? supported.first : nil
+        guard app != speakerWindowApp || title != speakerWindowTitle else { return }
+        captionTask?.cancel()
+        captionTask = nil
+        speakerWindowApp = app
+        speakerWindowTitle = title
+        guard let app else { return }
+        if app == .teams {
+            teamsCaptionsEnabled = true
+            captionSink = sink
+        }
+        let reader = MeetingSpeakerReader(app: app)
         captionTask = Task.detached(priority: .utility) { [weak self] in
             while !Task.isCancelled, let self {
-                let captions = await reader.read(locale: locale)
+                let sample = await reader.read(locale: locale, meetingTitle: title)
                 guard !Task.isCancelled else { return }
-                await self.observeCaptions(captions, sink: sink)
+                await self.observeMeetingSpeaker(sample, sink: sink)
                 do { try await Task.sleep(for: .seconds(2)) }
                 catch { return }
             }
         }
     }
 
-    private func observeCaptions(_ captions: [TeamsCaption]?, sink: SegmentSink) async {
+    private func observeMeetingSpeaker(_ sample: MeetingSpeakerSample?, sink: SegmentSink) async {
         guard let audioUptime, let system else { return }
         let now = ProcessInfo.processInfo.systemUptime - audioUptime
         let segments = await system.currentSegments()
+        let spans = await speakers.current()
         guard !Task.isCancelled else { return }
+        let captions = sample?.captions
         attribution.observe(captions, at: now)
         attribution.match(segments, at: now, sink: sink)
-        if let captions { await addParticipants(captions.map(\.name)) }
+        windowSpeakerAttribution.observe(sample?.activeNames ?? [],
+                                         at: (sample?.observedUptime ?? audioUptime + now) - audioUptime)
+        let recent = segments.filter { $0.end >= now - 45 }
+        windowSpeakerAttribution.match(Speakers.label(recent, spans: spans), spans: spans)
+        let names = (captions ?? []).map(\.name) + Array(sample?.activeNames ?? [])
+        if !names.isEmpty { await addParticipants(names) }
     }
 
     func addParticipants(_ names: [String]) async {
@@ -176,7 +195,7 @@ actor RecordingSession {
         if let finalSegments { return finalSegments }
         let segments = (await mic?.currentSegments() ?? []) + (await system?.currentSegments() ?? [])
         let labelled = Speakers.label(segments.sorted { $0.start < $1.start }, spans: await speakers.current())
-        return teamsCaptionsEnabled ? attribution.apply(to: labelled) : labelled
+        return windowSpeakerAttribution.apply(to: teamsCaptionsEnabled ? attribution.apply(to: labelled) : labelled)
     }
 
     func speakerRows() async -> [SpeakerReviewRow] {
@@ -283,13 +302,16 @@ actor RecordingSession {
         log("Aufnahme abgeschlossen: Mikro \(Int(Double(micFrames) / micRate))s, System \(Int(Double(systemFrames) / systemRate))s, \(segments.count) Textstuecke.")
 
         segments.sort { $0.start < $1.start }
-        segments = Speakers.label(segments, spans: await speakers.finish())
+        let spans = await speakers.finish()
+        segments = Speakers.label(segments, spans: spans)
         if teamsCaptionsEnabled {
             if let audioUptime {
                 attribution.match(segments, at: ProcessInfo.processInfo.systemUptime - audioUptime, sink: captionSink)
             }
             segments = attribution.apply(to: segments)
         }
+        windowSpeakerAttribution.match(segments, spans: spans)
+        segments = windowSpeakerAttribution.apply(to: segments)
         captionSink = nil
         reviewSink = nil
         finalSegments = segments

@@ -1,6 +1,4 @@
-import ApplicationServices
 import Foundation
-import ScreenCaptureKit
 
 struct TeamsCaption: Hashable, Sendable {
     let name: String
@@ -16,11 +14,13 @@ struct TeamsCaption: Hashable, Sendable {
     static func personName(_ value: String) -> String? {
         let name = value.replacingOccurrences(of: "\u{200e}", with: "")
             .replacingOccurrences(of: "\u{200f}", with: "")
+            .replacingOccurrences(of: #"\s*\((?:Gast|Guest|Extern|External)\)\s*$"#,
+                                  with: "", options: [.regularExpression, .caseInsensitive])
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let parts = name.split(separator: " ")
         guard (2...5).contains(parts.count), name.count <= 80,
               parts.allSatisfy({ part in
-                  part.first?.isUppercase == true &&
+                  (part.first?.isUppercase == true || ["von", "van", "de", "der", "da", "del"].contains(String(part))) &&
                       part.allSatisfy { $0.isLetter || "-’'.".contains($0) }
               }),
               !parts.contains(where: { ["speaker", "sprecher", "participant", "teilnehmer", "anonymous",
@@ -32,94 +32,6 @@ struct TeamsCaption: Hashable, Sendable {
     static func words(_ text: String) -> [Substring] {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-    }
-}
-
-actor TeamsCaptionReader {
-    static let appName = "Microsoft Teams"
-    private var nextOCR = Date.distantPast
-
-    func read(locale: String) async -> [TeamsCaption]? {
-        guard let window = try? await WindowShot.meetingWindow(matching: [Self.appName], logSelection: false),
-              let owner = window.owningApplication, owner.bundleIdentifier == "com.microsoft.teams2" else {
-            return nil
-        }
-        let visible = accessibility(in: window, pid: owner.processID)
-        if !visible.isEmpty { return visible }
-        guard Date() >= nextOCR else { return nil }
-        nextOCR = Date().addingTimeInterval(4)
-        guard let image = try? await WindowShot.capture(window, scale: 1),
-              let crop = image.cropping(to: CGRect(
-                x: 0, y: image.height / 2, width: image.width, height: image.height * 47 / 100
-              )) else { return nil }
-        let lines = await WindowShot.readLines(from: crop, locale: locale)
-        return lines.indices.compactMap { index in
-            let line = lines[index]
-            if let caption = Self.inline(line.text) { return caption }
-            guard let name = TeamsCaption.personName(line.text) else { return nil }
-            var previous = line.box
-            let utterance = lines.dropFirst(index + 1).prefix(3).prefix { below in
-                let gap = previous.minY - below.box.maxY
-                previous = below.box
-                return gap >= -0.006 && gap < 0.060 && abs(line.box.minX - below.box.minX) < 0.04 &&
-                    Self.inline(below.text) == nil && TeamsCaption.personName(below.text) == nil
-            }.map(\.text).joined(separator: " ")
-            return TeamsCaption(name: name, text: utterance)
-        }
-    }
-
-    private func accessibility(in window: SCWindow, pid: pid_t) -> [TeamsCaption] {
-        guard AXIsProcessTrusted(), let title = window.title, !title.isEmpty else { return [] }
-        let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.12)
-        let windows: [AXUIElement] = Self.attribute(kAXWindowsAttribute, of: app) ?? []
-        let exact = windows.filter { (Self.attribute(kAXTitleAttribute, of: $0) as String?) == title }
-        guard exact.count == 1, let window = exact.first else { return [] }
-        let deadline = Date().addingTimeInterval(0.45)
-        var budget = 350
-        var regions: [[String]] = []
-        func walk(_ element: AXUIElement, depth: Int, region: Int?) {
-            guard depth <= 24, budget > 0, Date() < deadline else { return }
-            budget -= 1
-            let role: String = Self.attribute(kAXRoleAttribute, of: element) ?? ""
-            let identifier: String = Self.attribute(kAXIdentifierAttribute, of: element) ?? ""
-            let domIdentifier: String = Self.attribute("AXDOMIdentifier", of: element) ?? ""
-            let marker = (identifier + " " + domIdentifier).lowercased()
-            let description: String = Self.attribute(kAXDescriptionAttribute, of: element) ?? ""
-            var activeRegion = region
-            if activeRegion == nil, role != kAXButtonRole,
-               marker.contains("caption") || role == kAXGroupRole &&
-               ["live captions", "liveuntertitel", "live-untertitel", "untertitel"].contains(description.lowercased()) {
-                activeRegion = regions.count
-                regions.append([])
-            }
-            if let activeRegion, role == kAXStaticTextRole {
-                let value: String = Self.attribute(kAXValueAttribute, of: element)
-                    ?? Self.attribute(kAXTitleAttribute, of: element) ?? description
-                if !value.isEmpty { regions[activeRegion].append(value) }
-            }
-            let children: [AXUIElement] = Self.attribute(kAXChildrenAttribute, of: element) ?? []
-            for child in children { walk(child, depth: depth + 1, region: activeRegion) }
-        }
-        walk(window, depth: 0, region: nil)
-        return regions.flatMap { region in
-            region.indices.compactMap { index in
-                if let caption = Self.inline(region[index]) { return caption }
-                guard region.indices.contains(index + 1) else { return nil }
-                return TeamsCaption(name: region[index], text: region[index + 1])
-            }
-        }
-    }
-
-    private static func attribute<T>(_ name: String, of element: AXUIElement) -> T? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
-        return value as? T
-    }
-
-    private static func inline(_ line: String) -> TeamsCaption? {
-        guard let separator = line.firstIndex(of: ":") else { return nil }
-        return TeamsCaption(name: String(line[..<separator]), text: String(line[line.index(after: separator)...]))
     }
 }
 

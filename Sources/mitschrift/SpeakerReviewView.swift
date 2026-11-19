@@ -87,6 +87,8 @@ struct SpeakerReviewView: View {
                         Text(identity.confirmed ? "Bestätigt" : "Vermutet")
                         if let score = identity.similarity {
                             Text("Auto \(score, format: .number.precision(.fractionLength(2)))")
+                        } else if identity.source == .window {
+                            Text("Meeting-Fenster")
                         }
                     }
                     .font(.caption).foregroundStyle(.secondary)

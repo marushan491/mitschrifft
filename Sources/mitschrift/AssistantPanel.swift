@@ -529,7 +529,12 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                 : "Ohne laufende Aufnahme"
             if let trailState {
                 let latest = current.showsSpeakerIdentity
-                    ? current.segments.last(where: { $0.end >= current.elapsed - 25 }).map { Speakers.name($0) }
+                    ? current.segments.last(where: { $0.end >= current.elapsed - 25 }).map { segment in
+                        if let identity = segment.speakerIdentity, !identity.confirmed {
+                            return identity.name + " ?"
+                        }
+                        return Speakers.name(segment)
+                    }
                     : nil
                 if trailState.recentSpeaker != latest { trailState.recentSpeaker = latest }
                 if trailState.speakers != current.speakerReview { trailState.speakers = current.speakerReview }

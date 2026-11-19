@@ -311,8 +311,9 @@ final class Supervisor {
                 idleSeconds = 0
                 users.forEach { sink?.noteApp($0.name) }
                 recordingApps = sink?.appNames ?? recordingApps
-                if recordingApps.contains(TeamsCaptionReader.appName), let session, let sink {
-                    await session.enableTeamsCaptions(locale: config.locale, sink: sink)
+                if let session, let sink {
+                    await session.setMeetingSpeakerSource(apps: users.map(\.name), locale: config.locale,
+                                                          title: meetingTitle, sink: sink)
                 }
             }
 
@@ -349,10 +350,9 @@ final class Supervisor {
             lastError = nil
             windowTexts = []
             nextWindowLook = Date().addingTimeInterval(20)
-            if apps.contains(TeamsCaptionReader.appName) {
-                await newSession.enableTeamsCaptions(locale: config.locale, sink: newSink)
-            }
             await noteMeetingTitle(sink: newSink, apps: apps)
+            await newSession.setMeetingSpeakerSource(apps: apps, locale: config.locale,
+                                                     title: meetingTitle, sink: newSink)
             if withVideo { await startVideo(sink: newSink, apps: apps) }
         } catch {
             lastError = error.localizedDescription

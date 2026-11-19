@@ -376,7 +376,7 @@ struct PartialSession {
             }
         }
         segments = Speakers.label(segments.sorted { $0.start < $1.start }, spans: spans)
-        if apps.contains(TeamsCaptionReader.appName) { segments = attribution.apply(to: segments) }
+        if apps.contains(MeetingSpeakerApp.teamsName) { segments = attribution.apply(to: segments) }
         segments = review.apply(to: segments)
     }
 }
