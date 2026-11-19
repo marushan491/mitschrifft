@@ -26,6 +26,11 @@ actor RecordingSession {
     private var systemRate = 48_000.0
     private var streamStopped = false
     private let speakers = SpeakerTracker()
+    private var audioUptime: TimeInterval?
+    private var captionTask: Task<Void, Never>?
+    private var captionSink: SegmentSink?
+    private var teamsCaptionsEnabled = false
+    private var attribution = SpeakerAttribution()
 
     init(locale: Locale) {
         self.locale = locale
@@ -59,7 +64,10 @@ actor RecordingSession {
     }
 
     private func handle(_ tapped: TappedBuffer) async {
-        if origin == nil { origin = tapped.hostTime }
+        if origin == nil {
+            origin = tapped.hostTime
+            audioUptime = ProcessInfo.processInfo.systemUptime
+        }
         let base = origin ?? tapped.hostTime
         let relative = CMTimeSubtract(tapped.hostTime, base)
         let offset = relative.isValid && relative.seconds >= 0 ? relative : CMTime.zero
@@ -94,12 +102,38 @@ actor RecordingSession {
 
     private func markStreamStopped() { streamStopped = true }
 
+    func enableTeamsCaptions(locale: String, sink: SegmentSink) {
+        guard !teamsCaptionsEnabled else { return }
+        teamsCaptionsEnabled = true
+        captionSink = sink
+        let reader = TeamsCaptionReader()
+        captionTask = Task.detached(priority: .utility) { [weak self] in
+            while !Task.isCancelled, let self {
+                let captions = await reader.read(locale: locale)
+                guard !Task.isCancelled else { return }
+                await self.observeCaptions(captions, sink: sink)
+                do { try await Task.sleep(for: .seconds(2)) }
+                catch { return }
+            }
+        }
+    }
+
+    private func observeCaptions(_ captions: [TeamsCaption]?, sink: SegmentSink) async {
+        guard let audioUptime, let system else { return }
+        let now = ProcessInfo.processInfo.systemUptime - audioUptime
+        let segments = await system.currentSegments()
+        guard !Task.isCancelled else { return }
+        attribution.observe(captions, at: now)
+        attribution.match(segments, at: now, sink: sink)
+    }
+
     func assistantSnapshot() async -> AssistantSnapshot {
         let segments = (await mic?.currentSegments() ?? []) + (await system?.currentSegments() ?? [])
         let labelled = Speakers.label(segments.sorted { $0.start < $1.start }, spans: await speakers.current())
-        return AssistantSnapshot(segments: Echo.removeMicEcho(labelled),
+        let named = teamsCaptionsEnabled ? attribution.apply(to: labelled) : labelled
+        return AssistantSnapshot(segments: Echo.removeMicEcho(named),
                                  elapsed: Date().timeIntervalSince(startedAt),
-                                 recording: true, startedAt: startedAt)
+                                 recording: true, startedAt: startedAt, showsSpeakerIdentity: teamsCaptionsEnabled)
     }
 
     func healthLine() async -> String {
@@ -112,6 +146,8 @@ actor RecordingSession {
     }
 
     func finish(timeout: Int) async -> SessionResult {
+        captionTask?.cancel()
+        captionTask = nil
         await tap?.stop()
         tap = nil
 
@@ -130,6 +166,13 @@ actor RecordingSession {
 
         segments.sort { $0.start < $1.start }
         segments = Speakers.label(segments, spans: await speakers.finish())
+        if teamsCaptionsEnabled {
+            if let audioUptime {
+                attribution.match(segments, at: ProcessInfo.processInfo.systemUptime - audioUptime, sink: captionSink)
+            }
+            segments = attribution.apply(to: segments)
+        }
+        captionSink = nil
         return SessionResult(startedAt: startedAt, endedAt: Date(), segments: segments)
     }
 }

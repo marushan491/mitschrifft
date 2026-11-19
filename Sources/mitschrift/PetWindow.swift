@@ -20,13 +20,15 @@ final class PetWindow {
     init(onPhoto: @escaping @MainActor () -> Void,
          onToggle: @escaping @MainActor () -> Void,
          onRecord: @escaping @MainActor () -> Void,
-         snapshot: @escaping @MainActor () async -> AssistantSnapshot) {
+         snapshot: @escaping @MainActor () async -> AssistantSnapshot,
+         presentation: AssistantPresentationGate? = nil,
+         trail: MeetingTrailState? = nil) {
         self.onPhoto = onPhoto
         self.onToggle = onToggle
         self.onRecord = onRecord
-        let visibility = AssistantPresentationGate()
-        presentation = visibility
-        assistant = AssistantPanel(presentation: visibility, snapshot: snapshot)
+        let visibility = presentation ?? AssistantPresentationGate()
+        self.presentation = visibility
+        assistant = AssistantPanel(presentation: visibility, snapshot: snapshot, trail: trail)
         pandaView.image = PandaIcon.glyph(.ready, size: 20, color: .labelColor)
         pandaView.setAccessibilityLabel("Mitschrift, bereit")
         pandaView.widthAnchor.constraint(equalToConstant: 20).isActive = true

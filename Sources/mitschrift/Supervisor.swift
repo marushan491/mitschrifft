@@ -14,12 +14,14 @@ final class Supervisor {
     var automaticEnabled = true { didSet { announce() } }
     var pausedUntil: Date? { didSet { announce() } }
     var onChange: (@MainActor () -> Void)?
+    var onRecordingEnded: (@MainActor (String, Bool) -> Void)?
 
     private let config: Config
     private let locale: Locale
     private let detector: MeetingDetector
     private var session: RecordingSession?
     private var sink: SegmentSink?
+    var recordingID: String? { sink?.id }
     private var manual = false
     private var startedDuringMeeting = false
     private var activeSeconds = 0
@@ -168,6 +170,7 @@ final class Supervisor {
         idleSeconds = 0
         log("Aufnahme verworfen, nichts gespeichert.")
         announce()
+        onRecordingEnded?(sink.id, false)
     }
 
     @discardableResult
@@ -306,6 +309,9 @@ final class Supervisor {
                 idleSeconds = 0
                 users.forEach { sink?.noteApp($0.name) }
                 recordingApps = sink?.appNames ?? recordingApps
+                if recordingApps.contains(TeamsCaptionReader.appName), let session, let sink {
+                    await session.enableTeamsCaptions(locale: config.locale, sink: sink)
+                }
             }
 
             if idleSeconds >= config.stopAfterSeconds,
@@ -339,6 +345,9 @@ final class Supervisor {
             lastError = nil
             windowTexts = []
             nextWindowLook = Date().addingTimeInterval(20)
+            if apps.contains(TeamsCaptionReader.appName) {
+                await newSession.enableTeamsCaptions(locale: config.locale, sink: newSink)
+            }
             await noteMeetingTitle(sink: newSink, apps: apps)
             if withVideo { await startVideo(sink: newSink, apps: apps) }
         } catch {
@@ -483,7 +492,11 @@ final class Supervisor {
         activeSink = nil
         sink.close()
 
-        defer { announce() }
+        var saved = false
+        defer {
+            announce()
+            onRecordingEnded?(sink.id, saved)
+        }
 
         let captured = screens
         screens = []
@@ -511,6 +524,7 @@ final class Supervisor {
                 apps: sink.appNames
             )
             lastNote = url
+            saved = true
             lastNoteAt = Date()
             notesToday += 1
             log("Notiz geschrieben: \(url.path)")

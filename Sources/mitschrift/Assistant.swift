@@ -8,8 +8,8 @@ struct AssistantSnapshot: Sendable {
     var recording = false
     var startedAt: Date?
     var recordingID: String?
+    var showsSpeakerIdentity = false
 }
-
 enum MeetingText {
     static func lines(_ segments: [Segment], since: TimeInterval = 0) -> String {
         segments.filter { $0.end >= since }
@@ -305,19 +305,5 @@ final class CodexAsk: @unchecked Sendable {
         lock.withLock {
             if let process, process.isRunning { process.terminate() }
         }
-    }
-}
-
-@MainActor
-final class AssistantPresentationGate {
-    private(set) var hidden = false
-
-    func setHidden(_ value: Bool) { hidden = value }
-
-    @discardableResult
-    func present(_ action: () -> Void) -> Bool {
-        guard !hidden else { return false }
-        action()
-        return true
     }
 }

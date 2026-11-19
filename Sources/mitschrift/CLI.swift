@@ -14,6 +14,12 @@ struct CLI {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
+#if MEETING_TRAIL_PROOF
+        if command == "meeting-trail-proof", args.count == 2 {
+            MeetingTrailProof.run(in: URL(fileURLWithPath: args[1], isDirectory: true))
+            return
+        }
+#endif
         if command == "menu" {
             guard startMenuMode() else { return }
             app.run()

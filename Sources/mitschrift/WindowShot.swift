@@ -13,7 +13,7 @@ enum WindowShot {
     static let ignoredTitles = ["kalender", "calendar", "chat", "aktivität", "activity",
                                 "teams und kanäle", "einstellungen", "settings", "dateien", "files"]
 
-    static func meetingWindow(matching names: [String]) async throws -> SCWindow? {
+    static func meetingWindow(matching names: [String], logSelection: Bool = true) async throws -> SCWindow? {
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
 
         let candidates = content.windows.filter { window in
@@ -33,7 +33,7 @@ enum WindowShot {
             return a.frame.width * a.frame.height > b.frame.width * b.frame.height
         }
 
-        if let chosen = ranked.first {
+        if logSelection, let chosen = ranked.first {
             let titles = ranked.map { "\($0.owningApplication?.applicationName ?? "?") / \($0.title ?? "ohne Titel")" }
             log("Fensterwahl: \(titles.joined(separator: " ; "))")
             return chosen
@@ -70,31 +70,35 @@ enum WindowShot {
         return first
     }
 
-    static func capture(_ window: SCWindow) async throws -> CGImage {
+    static func capture(_ window: SCWindow, scale: Double = 2) async throws -> CGImage {
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let config = SCStreamConfiguration()
-        config.width = Int(window.frame.width * 2)
-        config.height = Int(window.frame.height * 2)
+        config.width = Int(window.frame.width * scale)
+        config.height = Int(window.frame.height * scale)
         config.showsCursor = false
         config.captureResolution = .best
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 
     static func readText(from image: CGImage, locale: String) async -> String {
+        await readLines(from: image, locale: locale).map(\.text).joined(separator: "\n")
+    }
+
+    static func readLines(from image: CGImage, locale: String) async -> [(text: String, box: CGRect)] {
         var request = RecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.recognitionLanguages = [Locale.Language(identifier: locale), Locale.Language(identifier: "en-US")]
 
-        guard let observations = try? await request.perform(on: image) else { return "" }
+        guard let observations = try? await request.perform(on: image) else { return [] }
 
-        let lines = observations
+        return observations
             .sorted { $0.boundingBox.cgRect.minY > $1.boundingBox.cgRect.minY }
-            .compactMap { $0.topCandidates(1).first?.string }
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-
-        return lines.joined(separator: "\n")
+            .compactMap { observation in
+                guard let line = observation.topCandidates(1).first?.string.trimmingCharacters(in: .whitespaces),
+                      !line.isEmpty else { return nil }
+                return (line, observation.boundingBox.cgRect)
+            }
     }
 
     static func writeImage(_ image: CGImage, to url: URL, maxWidth: Int, quality: Double) throws {

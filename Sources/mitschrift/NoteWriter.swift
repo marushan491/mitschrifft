@@ -234,6 +234,7 @@ struct PartialSession {
     init?(url: URL) {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         var spans: [SpeakerSpan] = []
+        var attribution = SpeakerAttribution()
         for line in content.split(separator: "\n") {
             guard let data = line.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -260,6 +261,12 @@ struct PartialSession {
                       let end = object["end"] as? Double
                 else { continue }
                 spans.append(SpeakerSpan(speaker: speaker, start: start, end: end))
+            case "speaker_name":
+                guard let rawName = object["name"] as? String,
+                      let name = TeamsCaption.personName(rawName),
+                      let start = object["start"] as? Double, let end = object["end"] as? Double,
+                      start.isFinite, end.isFinite, start >= 0, end >= start else { continue }
+                attribution.add(name, at: .init(start: start, end: end))
             case "screen":
                 guard let at = object["at"] as? Double,
                       let app = object["app"] as? String
@@ -277,5 +284,6 @@ struct PartialSession {
             }
         }
         segments = Speakers.label(segments.sorted { $0.start < $1.start }, spans: spans)
+        if apps.contains(TeamsCaptionReader.appName) { segments = attribution.apply(to: segments) }
     }
 }

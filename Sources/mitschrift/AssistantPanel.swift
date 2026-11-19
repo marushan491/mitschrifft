@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import UniformTypeIdentifiers
 
 private final class AssistantWindow: NSPanel {
@@ -35,6 +36,9 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     private var loadingModels = false
     private var modelLoadFailed = false
     private let panes = NSSegmentedControl()
+    private let trailView: NSHostingView<MeetingTrailView>?
+    private let trailState: MeetingTrailState?
+    private let compose: ComposerSurface
     private let liveView = ChatTextView.reader()
     private let liveScroll = NSScrollView()
     private let askedButton = NSButton(title: "Was wurde ich gerade gefragt?", target: nil, action: nil)
@@ -57,7 +61,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     private let answerView = ChatTextView.reader()
     private let answerScroll = NSScrollView()
     private let surface = NSVisualEffectView()
-    private let meetingStatus = NSTextField(labelWithString: "Bereit für deine Frage")
+    private let meetingStatus = NSTextField(labelWithString: "Ohne laufende Aufnahme")
     private let recordingIndicator = NSImageView(image: NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Aufnahme läuft")!)
     private let imageButton = NSButton(title: "Bild", target: nil, action: nil)
     private let shotButton = NSButton(title: "Screenshot", target: nil, action: nil)
@@ -79,13 +83,16 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
          snapshot: @escaping @MainActor () async -> AssistantSnapshot,
          codex: CodexAsk = CodexAsk(config: Config.load()),
          conversation: AssistantConversation = AssistantConversation(),
-         models: AssistantModels? = nil, configFile: URL = Config.file) {
+         models: AssistantModels? = nil, configFile: URL = Config.file, trail: MeetingTrailState? = nil) {
         self.presentation = presentation
         self.snapshot = snapshot
         self.codex = codex
         self.configFile = configFile
         self.conversation = conversation
         self.modelGroups = models
+        trailState = trail
+        trailView = trail.map { NSHostingView(rootView: MeetingTrailView(state: $0)) }
+        compose = ComposerSurface()
         selectedModels = ["chat": codex.modelID(for: "chat"), "analysis": codex.modelID(for: "analysis")]
         if let models {
             selectedModels = ["chat": models.chat.current, "analysis": models.analysis.current]
@@ -113,9 +120,10 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(updateTransparency),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
 
-        panes.segmentCount = 2
+        panes.segmentCount = trail == nil ? 2 : 3
         panes.setLabel("Live", forSegment: 0)
         panes.setLabel("Chat", forSegment: 1)
+        if trail != nil { panes.setLabel("Spur", forSegment: 2) }
         panes.selectedSegment = 1
         panes.target = self
         panes.action = #selector(paneChanged)
@@ -211,7 +219,9 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         header.spacing = 8
 
         let body = NSView()
-        for scroll in [answerScroll, liveScroll] {
+        trailView?.sizingOptions = []
+        let panesContent: [NSView] = [answerScroll, liveScroll] + (trailView.map { [$0 as NSView] } ?? [])
+        for scroll in panesContent {
             scroll.translatesAutoresizingMaskIntoConstraints = false
             body.addSubview(scroll)
             NSLayoutConstraint.activate([
@@ -221,7 +231,10 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                 scroll.bottomAnchor.constraint(equalTo: body.bottomAnchor)
             ])
         }
-        body.setContentHuggingPriority(.defaultLow, for: .vertical)
+        body.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .vertical)
+        for view in [header, quickActions, compose, status] {
+            view.setContentHuggingPriority(.required, for: .vertical)
+        }
 
         let editor = NSScrollView()
         editor.documentView = query
@@ -252,7 +265,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         commandHints.alignment = .leading
         commandHints.spacing = 2
         commandHints.isHidden = true
-        let compose = ComposerSurface(views: [previews, commandHints, editor, tools])
+        for view in [previews, commandHints, editor, tools] { compose.addArrangedSubview(view) }
         compose.orientation = .vertical
         compose.alignment = .leading
         compose.spacing = 10
@@ -279,6 +292,7 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         let stack = NSStackView(views: [header, body, quickActions, compose, status])
         stack.orientation = .vertical
         stack.alignment = .leading
+        stack.distribution = .fill
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView?.addSubview(stack)
@@ -476,6 +490,27 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
         present(focus: false)
     }
 
+    var isShowingTrail: Bool { panel.isVisible && panes.selectedSegment == 2 }
+
+    func setTrailTransparency(_ value: Bool) {
+        trailState?.translucent = value
+        updateTransparency()
+    }
+
+    func showTrail(automatic: Bool = false) {
+        guard trailView != nil, !presentation.hidden else { return }
+        if automatic && panel.isKeyWindow && NSApp.isActive { return }
+        panes.selectedSegment = 2
+        paneChanged()
+        if automatic {
+            if !panel.isVisible { panel.center() }
+            panel.orderFrontRegardless()
+            refreshLocalViews()
+        } else {
+            present(focus: false)
+        }
+    }
+
     func hideForSharing() {
         restoreAfterCapture = false
         cancelTapped()
@@ -492,6 +527,12 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
             meetingStatus.stringValue = current.recording
                 ? "\(current.meeting ?? "Besprechung")   \(formatClock(current.elapsed))"
                 : "Ohne laufende Aufnahme"
+            if let trailState {
+                let latest = current.showsSpeakerIdentity
+                    ? current.segments.last(where: { $0.end >= current.elapsed - 25 }).map { Speakers.name($0) }
+                    : nil
+                if trailState.recentSpeaker != latest { trailState.recentSpeaker = latest }
+            }
             if task == nil, conversation.update(for: current) {
                 SharedChat.clear()
                 render()
@@ -519,9 +560,21 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
 
     @objc private func paneChanged() {
         let live = panes.selectedSegment == 0
+        let trail = panes.selectedSegment == 2
+        if trail, let responder = panel.firstResponder as? NSView,
+           responder === query || responder.isDescendant(of: compose) {
+            panel.makeFirstResponder(nil)
+        }
         liveScroll.isHidden = !live
-        answerScroll.isHidden = live
-        quickActions.isHidden = live
+        answerScroll.isHidden = panes.selectedSegment != 1
+        trailView?.isHidden = !trail
+        if trail { trailState?.refresh() }
+        quickActions.isHidden = live || trail
+        compose.isHidden = trail
+        status.isHidden = trail
+        copyButton.isHidden = trail
+        clearButton.isHidden = trail
+        updateTransparency()
         updateModelMenu()
         copyButton.title = live ? "Mitschrift kopieren" : "Antwort kopieren"
         copyButton.imagePosition = .imageOnly
@@ -809,9 +862,12 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
     }
 
     @objc private func updateTransparency() {
-        surface.blendingMode = .withinWindow
-        surface.state = .inactive
-        surface.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        let translucent = panes.selectedSegment == 2 && trailState?.translucent == true &&
+            !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        surface.material = .contentBackground
+        surface.blendingMode = translucent ? .behindWindow : .withinWindow
+        surface.state = translucent ? .active : .inactive
+        surface.layer?.backgroundColor = translucent ? nil : NSColor.windowBackgroundColor.cgColor
         for scroll in [liveScroll, answerScroll] {
             scroll.backgroundColor = ChatColors.surface
         }

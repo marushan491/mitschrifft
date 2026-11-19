@@ -99,7 +99,9 @@ enum Speakers {
 
     static func name(_ segment: Segment, me: String = "Ich", others: String = "Andere") -> String {
         if segment.track == .mic { return segment.uncertain ? uncertainMic : me }
-        return segment.speaker.map { "Sprecher \($0)" } ?? others
+        if let name = segment.speakerName { return name }
+        let label = segment.speaker.map { "Sprecher \($0)" } ?? others
+        return segment.speakerNameUncertain ? label + " ?" : label
     }
 
     static func label(_ segments: [Segment], spans: [SpeakerSpan]) -> [Segment] {
@@ -112,10 +114,17 @@ enum Speakers {
                 let shared = min(span.end, segment.end) - max(span.start, segment.start)
                 if shared > 0 { overlap[span.speaker, default: 0] += shared }
             }
-            guard let best = overlap.max(by: { $0.value < $1.value })?.key else { return segment }
+            let ranked = overlap.sorted {
+                $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value
+            }
+            guard let strongest = ranked.first else { return segment }
+            let best = strongest.key
             if numbering[best] == nil { numbering[best] = numbering.count + 1 }
             var labelled = segment
             labelled.speaker = numbering[best]
+            if let second = ranked.dropFirst().first {
+                labelled.overlappingSpeakers = second.value >= 0.25 && second.value >= strongest.value * 0.30
+            }
             return labelled
         }
     }

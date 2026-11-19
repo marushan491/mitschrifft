@@ -21,7 +21,7 @@ final class SegmentSink: @unchecked Sendable {
         self.url = config.partialDirectory.appendingPathComponent("\(id).jsonl")
 
         try FileManager.default.createDirectory(at: config.partialDirectory, withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: url.path, contents: nil)
+        FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
         handle = try FileHandle(forWritingTo: url)
         writeLine(["kind": "header",
                    "id": id,
@@ -54,6 +54,10 @@ final class SegmentSink: @unchecked Sendable {
 
     func append(span: SpeakerSpan) {
         writeLine(["kind": "speaker", "speaker": span.speaker, "start": span.start, "end": span.end])
+    }
+
+    func appendSpeakerName(_ name: String, start: TimeInterval, end: TimeInterval) {
+        writeLine(["kind": "speaker_name", "name": name, "start": start, "end": end])
     }
 
     func append(screen: ScreenCapture) {

@@ -9,6 +9,11 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var supervisor: Supervisor?
     private var ticker: Timer?
     private var pet: PetWindow?
+    private let presentation = AssistantPresentationGate()
+    private(set) var trail: MeetingTrailState?
+    var assistant: AssistantPanel? { pet?.assistant }
+    private(set) var trailPilot: MeetingTrailPilot?
+    private var shownRecording: String?
     private var photoHotKey: HotKey?
     private let config: Config
 
@@ -23,12 +28,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = NSMenu()
         statusItem.menu?.delegate = self
 
-        pet = PetWindow(
-            onPhoto: { [weak self] in self?.takePhoto() },
-            onToggle: { [weak self] in self?.toggleVideo() },
-            onRecord: { [weak self] in self?.toggleRecording() },
-            snapshot: { [weak self] in await self?.supervisor?.assistantSnapshot() ?? AssistantSnapshot() }
-        )
+        configureWindows()
         photoHotKey = HotKey(shortcut: config.photoHotKey) { [weak self] in self?.takePhoto() }
 
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
@@ -59,6 +59,9 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let locale = try await CLI.prepareLocale(self.config)
                 let supervisor = Supervisor(config: self.config, locale: locale)
                 supervisor.onChange = { [weak self] in self?.render() }
+                supervisor.onRecordingEnded = { [weak self] id, saved in
+                    self?.trailPilot?.recordingEnded(id, saved: saved)
+                }
                 supervisor.begin()
                 self.supervisor = supervisor
                 self.render()
@@ -69,9 +72,40 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        trailPilot?.stop()
         SharedChat.clear()
         LiveState.clear()
         ticker?.invalidate()
+    }
+
+    func configureWindows(trailFolder: URL = Config.stateDirectory.appendingPathComponent("meeting-trail"),
+                          settings: MeetingTrailSettings? = MeetingTrailSettings.load(),
+                          snapshot: (@MainActor () async -> AssistantSnapshot)? = nil) {
+        try? FileManager.default.createDirectory(at: trailFolder, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let trail = MeetingTrailState(file: trailFolder.appendingPathComponent("note.json"))
+        self.trail = trail
+        if let settings {
+            trailPilot = MeetingTrailPilot(settings: settings, state: trail)
+        } else {
+            trail.status = "Notiz-Agent ist nicht eingerichtet."
+        }
+        pet = PetWindow(onPhoto: { [weak self] in self?.takePhoto() },
+                        onToggle: { [weak self] in self?.toggleVideo() },
+                        onRecord: { [weak self] in self?.toggleRecording() },
+                        snapshot: snapshot ?? { [weak self] in
+                            await self?.supervisor?.assistantSnapshot() ?? AssistantSnapshot()
+                        },
+                        presentation: presentation, trail: trail)
+    }
+
+    func renderTrail(recordingID: String?, title: String?) {
+        guard let recordingID else { return }
+        trailPilot?.recordingStarted(recordingID, title: title)
+        if shownRecording != recordingID {
+            shownRecording = recordingID
+            assistant?.showTrail(automatic: true)
+        }
     }
 
     private func render() {
@@ -110,6 +144,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                    permissionDenied: supervisor.screenPermissionDenied)
         pet?.refreshLocalViews()
         pet?.show()
+        renderTrail(recordingID: supervisor.recordingID, title: supervisor.meetingTitle)
     }
 
     private func toggleRecording() {
@@ -135,6 +170,13 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if let trail {
+            menu.addItem(action(assistant?.isShowingTrail == true ? "Gesprächsspur ausblenden" : "Gesprächsspur einblenden",
+                                #selector(toggleTrail)))
+            let opacity = action("Gesprächsspur leicht transparent", #selector(toggleTrailTransparency))
+            opacity.state = trail.translucent ? .on : .off
+            menu.addItem(opacity)
+        }
 
         guard let supervisor else {
             let item = NSMenuItem(title: "Mitschrift startet ...", action: nil, keyEquivalent: "")
@@ -167,7 +209,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(action("Was wurde ich gerade gefragt?", #selector(assistantQuestion), key: "j"))
         menu.addItem(action("Chat…", #selector(assistantOpen)))
         menu.addItem(action("Live-Transkript anzeigen", #selector(assistantLive)))
-        let privateDisplay = action("Panda und Antworten beim Teilen verbergen", #selector(togglePrivateDisplay))
+        let privateDisplay = action("Mitschrift-Fenster beim Teilen verbergen", #selector(togglePrivateDisplay))
         privateDisplay.state = pet?.privacyHidden == true ? .on : .off
         menu.addItem(privateDisplay)
 
@@ -231,7 +273,19 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func assistantOpen() { pet?.showAssistant() }
     @objc private func assistantLive() { pet?.showLive() }
-    @objc private func togglePrivateDisplay() { pet?.setPrivacyHidden(!(pet?.privacyHidden ?? false)) }
+    @objc private func toggleTrail() {
+        guard let assistant else { return }
+        if assistant.isShowingTrail { assistant.panel.orderOut(nil) }
+        else { assistant.showTrail() }
+    }
+    @objc private func toggleTrailTransparency() {
+        guard let trail else { return }
+        let translucent = !trail.translucent
+        assistant?.setTrailTransparency(translucent)
+        UserDefaults.standard.set(translucent, forKey: "meetingTrail.translucent")
+    }
+    func setPrivacyHidden(_ value: Bool) { pet?.setPrivacyHidden(value) }
+    @objc private func togglePrivateDisplay() { setPrivacyHidden(!presentation.hidden) }
 
     @objc private func photoFromMenu() {
         takePhoto()
