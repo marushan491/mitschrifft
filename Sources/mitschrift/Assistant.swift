@@ -9,17 +9,27 @@ struct AssistantSnapshot: Sendable {
     var startedAt: Date?
     var recordingID: String?
     var showsSpeakerIdentity = false
+    var speakerReview: [SpeakerReviewRow] = []
+    var speakerRecordingID: String?
 }
 enum MeetingText {
-    static func lines(_ segments: [Segment], since: TimeInterval = 0) -> String {
+    static func lines(_ segments: [Segment], since: TimeInterval = 0, showSuggestions: Bool = false) -> String {
         segments.filter { $0.end >= since }
-            .map { "[\(formatClock($0.start))] \(Speakers.name($0)): \($0.text)" }
+            .map { segment in
+                let name: String
+                if showSuggestions, let identity = segment.speakerIdentity, !identity.confirmed {
+                    name = "\(identity.name) ? (\(Speakers.name(segment)))"
+                } else {
+                    name = Speakers.name(segment)
+                }
+                return "[\(formatClock(segment.start))] \(name): \(segment.text)"
+            }
             .joined(separator: "\n")
     }
 
     static func live(_ snapshot: AssistantSnapshot) -> String {
         guard snapshot.recording else { return "Gerade läuft keine Aufnahme." }
-        let text = lines(snapshot.segments, since: max(0, snapshot.elapsed - 600))
+        let text = lines(snapshot.segments, since: max(0, snapshot.elapsed - 600), showSuggestions: true)
         return text.isEmpty ? "Noch kein Text erkannt." : text.replacingOccurrences(of: "\n", with: "\n\n")
     }
 }

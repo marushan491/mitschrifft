@@ -85,8 +85,15 @@ final class MenuBarApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                 attributes: [.posixPermissions: 0o700])
         let trail = MeetingTrailState(file: trailFolder.appendingPathComponent("note.json"))
         self.trail = trail
+        trail.reviewSpeaker = { [weak self] action in
+            await self?.supervisor?.reviewSpeaker(action) ??
+                SpeakerReviewResponse(message: "Mitschrift startet noch.")
+        }
         if let settings {
             trailPilot = MeetingTrailPilot(settings: settings, state: trail)
+            trailPilot?.onGlossary = { [weak self] id, terms in
+                await self?.supervisor?.setGlossary(terms, recordingID: id)
+            }
         } else {
             trail.status = "Notiz-Agent ist nicht eingerichtet."
         }

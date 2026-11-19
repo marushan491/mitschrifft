@@ -8,7 +8,7 @@ mkdir -p "$preview_root"
 preview_dir="$(mktemp -d "$preview_root/gespraechsspur.XXXXXX")"
 app="$preview_dir/Gesprächsspur Vorschau.app"
 mkdir -p "$app/Contents/MacOS"
-xcrun swiftc -O -parse-as-library -swift-version 5 \
+xcrun swiftc -O -parse-as-library -swift-version 5 -D MEETING_TRAIL_PREVIEW \
     Sources/mitschrift/AssistantPresentationGate.swift Sources/mitschrift/MeetingTrail.swift Sources/mitschrift/MeetingTrailPilot.swift \
     scripts/meeting-trail-preview.swift \
     -o "$app/Contents/MacOS/MeetingTrailPreview"

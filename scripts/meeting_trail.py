@@ -120,6 +120,30 @@ def glossary_context(directory, entry):
     return content.strip()[:2500]
 
 
+def glossary_terms(glossary):
+    terms = []
+    for raw in glossary.splitlines():
+        line = re.sub(r"^(?:[-*+]\s+|\d+[.)]\s+)", "", raw.strip())
+        if line.startswith("|"):
+            candidate = line.split("|", 2)[1].strip()
+        elif match := re.match(r"^#{1,6}\s+(.+)$", line):
+            candidate = match.group(1)
+        elif match := re.match(r"^(?:\*\*([^*]+)\*\*|`([^`]+)`)\s*(?:[:–—-]|$)", line):
+            candidate = match.group(1) or match.group(2)
+        else:
+            candidate = re.split(r":\s+|\s+[–—-]\s+", line, maxsplit=1)[0]
+            if candidate == line:
+                continue
+        candidate = " ".join(candidate.strip("*_` ").split())
+        if (2 <= len(candidate) <= 60 and len(candidate.split()) <= 6 and any(c.isalpha() for c in candidate)
+                and candidate.casefold() not in {"begriff", "term", "glossar", "glossary", "abkürzung"}
+                and candidate not in terms):
+            terms.append(candidate)
+        if len(terms) == 50:
+            break
+    return terms
+
+
 def open_pull_requests(config, directory):
     if directory is None:
         return None
@@ -157,6 +181,7 @@ def project_packet(config, project, title):
     return {
         "projectContext": {"Projektnotiz": note, "Glossar": glossary, "Offene PRs": pull_requests, "Termintitel": title},
         "meetingTitle": title or None, "contextLabel": " / ".join(sources) or None,
+        "glossaryTerms": glossary_terms(glossary),
         "hasProjectContext": bool(note or glossary or pull_requests is not None),
         "workspaceID": workspace, "workspaceDirectory": str(directory) if directory else None,
         "vaultNote": str(path) if path else None,

@@ -66,7 +66,7 @@ enum SpeakerProfiles {
         for sample in sampledEmbeddings(samples) where !distinct.contains(sample) {
             distinct.append(sample)
         }
-        guard !distinct.isEmpty else { throw ProfileError.insufficientReferences }
+        guard distinct.count >= 5 else { throw ProfileError.insufficientReferences }
 
         try lock.withLock {
             var records = try load()
@@ -77,7 +77,7 @@ enum SpeakerProfiles {
                     cosine($0, anchor) >= refinementThreshold
                         && similarity($0, to: record.references) >= refinementThreshold
                 }
-                guard !consistent.isEmpty else { throw ProfileError.inconsistentReferences }
+                guard consistent.count * 5 >= distinct.count * 3 else { throw ProfileError.inconsistentReferences }
                 let additions = consistent.filter { !record.references.contains($0) }
                 let recent = Array(record.references.dropFirst()) + additions
                 records[index] = Record(
@@ -193,12 +193,14 @@ enum SpeakerProfiles {
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         try data.write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
 
     private static func loadKey() throws -> SymmetricKey? {
         var query = keyQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }

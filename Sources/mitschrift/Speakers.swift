@@ -19,7 +19,7 @@ actor SpeakerTracker {
     private var warnedFormat = false
     private var finished = false
     private var voiceSampling = VoiceSampling()
-    private let voiceExtractor = VoiceEmbeddingExtractor()
+    private let voiceExtractor = VoiceEmbeddingExtractor.shared
     private var voiceTask: Task<Void, Never>?
     private var voiceFailed = false
 
@@ -93,7 +93,7 @@ actor SpeakerTracker {
         }
     }
 
-    func finish() async -> [SpeakerSpan] {
+    func finish() -> [SpeakerSpan] {
         if !finished {
             finished = true
             if let diarizer, !failed, let update = try? diarizer.finalizeSession() {
@@ -103,14 +103,16 @@ actor SpeakerTracker {
             let speakers = Set(spans.map(\.speaker)).count
             log("Sprechertrennung: \(speakers) Sprecher, \(spans.count) Abschnitte.")
         }
-        await voiceTask?.value
         voiceSampling.discardAudio()
         return spans
     }
 
     func current() -> [SpeakerSpan] { spans }
 
-    func voiceReferences() async -> [Int: [[Float]]] { voiceSampling.references }
+    func voiceReferences() async -> [Int: [[Float]]] {
+        if finished { await voiceTask?.value }
+        return voiceSampling.references
+    }
 
     private func collect(_ update: DiarizerTimelineUpdate, from diarizer: LSEENDDiarizer) {
         let base = origin ?? 0
@@ -160,7 +162,8 @@ enum Speakers {
 
     static func label(_ segments: [Segment], spans: [SpeakerSpan]) -> [Segment] {
         var labelled = segments
-        assignNumbers(segments, spans: spans) { index, speaker, overlapping in
+        assignNumbers(segments, spans: spans) { index, raw, speaker, overlapping in
+            labelled[index].rawSpeaker = raw
             labelled[index].speaker = speaker
             if let overlapping { labelled[index].overlappingSpeakers = overlapping }
         }
@@ -173,7 +176,7 @@ enum Speakers {
 
     @discardableResult
     private static func assignNumbers(_ segments: [Segment], spans: [SpeakerSpan],
-                                      assign: ((Int, Int, Bool?) -> Void)? = nil) -> [Int: Int] {
+                                      assign: ((Int, Int, Int, Bool?) -> Void)? = nil) -> [Int: Int] {
         guard !spans.isEmpty else { return [:] }
         var numbering: [Int: Int] = [:]
         for (index, segment) in segments.enumerated() where segment.track == .system {
@@ -192,7 +195,7 @@ enum Speakers {
             let overlapping = ranked.dropFirst().first.map {
                 $0.value >= 0.25 && $0.value >= strongest.value * 0.30
             }
-            assign?(index, speaker, overlapping)
+            assign?(index, best, speaker, overlapping)
         }
         return numbering
     }

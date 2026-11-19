@@ -51,6 +51,7 @@ final class MeetingTrailPilot {
     private var ending: (id: String, saved: Bool)?
     private(set) var recentSession: String?
     private(set) var updates: [(id: String, at: Date)] = []
+    var onGlossary: ((String, [String]) async -> Void)?
 
     init(settings: MeetingTrailSettings, state: MeetingTrailState, presentPreview: (() -> Void)? = nil) {
         self.settings = settings
@@ -222,6 +223,9 @@ final class MeetingTrailPilot {
                 try encoded.write(to: state.file, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: state.file.path)
                 state.refresh()
+                if observedID == id, let terms = note.glossaryTerms {
+                    await onGlossary?(id, Array(terms.prefix(50)))
+                }
             } catch {
                 state.status = "Gesprächsnotiz konnte lokal nicht gespeichert werden"
             }

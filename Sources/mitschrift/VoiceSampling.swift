@@ -153,6 +153,7 @@ struct VoiceSampling {
 }
 
 actor VoiceEmbeddingExtractor {
+    static let shared = VoiceEmbeddingExtractor()
     private let converter = AudioConverter(sampleRate: 16_000)
     private var extractor: EmbeddingExtractor?
     private var mask: [[Float]] = []

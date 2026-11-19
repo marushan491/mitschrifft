@@ -532,6 +532,11 @@ final class AssistantPanel: NSObject, NSWindowDelegate {
                     ? current.segments.last(where: { $0.end >= current.elapsed - 25 }).map { Speakers.name($0) }
                     : nil
                 if trailState.recentSpeaker != latest { trailState.recentSpeaker = latest }
+                if trailState.speakers != current.speakerReview { trailState.speakers = current.speakerReview }
+                if trailState.speakerRecording != current.speakerRecordingID {
+                    trailState.speakerRecording = current.speakerRecordingID
+                }
+                if trailState.canEditSpeakers != current.recording { trailState.canEditSpeakers = current.recording }
             }
             if task == nil, conversation.update(for: current) {
                 SharedChat.clear()

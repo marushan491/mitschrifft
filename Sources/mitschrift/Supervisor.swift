@@ -42,6 +42,8 @@ final class Supervisor {
     private(set) var meetingTitle: String?
     private var nextWindowLook: Date?
     private var windowTexts: [String] = []
+    private var lastSpeakerSession: RecordingSession?
+    private var lastSpeakerRecordingID: String?
     private(set) var detectedApps: [String] = []
 
     private let tick = 2
@@ -331,9 +333,11 @@ final class Supervisor {
             SharedChat.clear()
             activeSink = newSink
             let newSession = RecordingSession(locale: locale)
-            try await newSession.start()
+            try await newSession.start(sink: newSink)
             session = newSession
             sink = newSink
+            lastSpeakerSession = nil
+            lastSpeakerRecordingID = nil
             isRecording = true
             recordingStart = Date()
             recordingApps = apps
@@ -430,8 +434,13 @@ final class Supervisor {
         guard let image = try? await WindowShot.capture(window) else { return }
         let text = await WindowShot.readText(from: image, locale: config.locale)
         guard !text.isEmpty else { return }
+        guard sink.id == self.sink?.id, let session else { return }
         windowTexts.append("Fenster: \(window.title ?? "ohne Titel")\n\(text)")
         if windowTexts.count > 8 { windowTexts.removeFirst() }
+        let names = await Task.detached(priority: .utility) {
+            (try? SpeakerProfiles.list().map(\.name)) ?? []
+        }.value
+        await session.addParticipants(Structure.localParticipantHints(text, knownNames: names))
         log("Teilnehmerblick: \(text.split(separator: "\n").count) Zeilen aus \(window.owningApplication?.applicationName ?? "?")")
     }
 
@@ -525,6 +534,11 @@ final class Supervisor {
             )
             lastNote = url
             saved = true
+            if self.session == nil {
+                lastSpeakerSession = session
+                lastSpeakerRecordingID = sink.id
+                Task.detached(priority: .utility) { await session.refreshVoiceMatches() }
+            }
             lastNoteAt = Date()
             notesToday += 1
             log("Notiz geschrieben: \(url.path)")
@@ -560,11 +574,65 @@ final class Supervisor {
     var notesDirectory: URL { config.notesDirectory }
 
     func assistantSnapshot() async -> AssistantSnapshot {
-        guard let session, isRecording else { return AssistantSnapshot() }
+        guard let session, isRecording else {
+            return AssistantSnapshot(speakerReview: await lastSpeakerSession?.speakerRows() ?? [],
+                                     speakerRecordingID: lastSpeakerRecordingID)
+        }
         var snapshot = await session.assistantSnapshot()
         snapshot.recordingID = sink?.id
         snapshot.meeting = meetingTitle
         snapshot.screenText = screens.last?.text
+        snapshot.speakerRecordingID = sink?.id
         return snapshot
+    }
+
+    func setGlossary(_ terms: [String], recordingID: String) async {
+        if sink?.id == recordingID { await session?.setGlossary(terms) }
+    }
+
+    func reviewSpeaker(_ action: SpeakerReviewAction) async -> SpeakerReviewResponse {
+        do {
+            switch action {
+            case .confirm(let recording, let speaker, let name):
+                if sink?.id == recording, let session { return await session.confirmSpeaker(speaker, as: name) }
+                if lastSpeakerRecordingID == recording, let lastSpeakerSession {
+                    return await lastSpeakerSession.confirmSpeaker(speaker, as: name)
+                }
+            case .merge(let recording, let speaker, let target):
+                if sink?.id == recording, let session { return await session.mergeSpeaker(speaker, into: target) }
+            case .remember(let recording, let speaker, let name, let consent):
+                let selected = sink?.id == recording ? session :
+                    lastSpeakerRecordingID == recording ? lastSpeakerSession : nil
+                guard let selected else { break }
+                try await selected.rememberSpeaker(speaker, as: name, consentedAt: consent)
+                return SpeakerReviewResponse(message: "Stimmprofil lokal gespeichert.")
+            case .suggest(let recording):
+                guard sink?.id == recording, let session else { break }
+                let evidence = await session.speakerEvidence()
+                let screen = Structure.uniqueLines(windowTexts)
+                let meeting = meetingTitle
+                let apps = recordingApps
+                let structure = Structure(config: config)
+                let suggestions = try await Task.detached(priority: .utility) {
+                    try structure.speakerSuggestions(evidence: evidence, screen: screen, meeting: meeting, apps: apps)
+                }.value
+                guard sink?.id == recording else { break }
+                await session.acceptSuggestions(suggestions)
+                return SpeakerReviewResponse(message: suggestions.isEmpty ? "Keine belegten Namensvorschläge." : nil)
+            case .profiles:
+                let profiles = try await Task.detached(priority: .utility) { try SpeakerProfiles.list() }.value
+                return SpeakerReviewResponse(message: nil, profiles: profiles)
+            case .delete(let id):
+                let profiles = try await Task.detached(priority: .utility) {
+                    try SpeakerProfiles.delete(id: id)
+                    return try SpeakerProfiles.list()
+                }.value
+                await session?.refreshVoiceMatches()
+                return SpeakerReviewResponse(message: "Stimmprofil gelöscht.", profiles: profiles)
+            }
+            return SpeakerReviewResponse(message: "Die Aufnahme ist für diese Änderung nicht mehr verfügbar.")
+        } catch {
+            return SpeakerReviewResponse(message: error.localizedDescription)
+        }
     }
 }

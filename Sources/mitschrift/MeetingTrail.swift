@@ -29,6 +29,7 @@ struct MeetingTrailNote: Codable, Equatable {
     var contextLabel: String?
     var workspaceID: String?
     var meetingTitle: String?
+    var glossaryTerms: [String]?
 
     static func read(from file: URL) throws -> Self {
         let handle = try FileHandle(forReadingFrom: file)
@@ -62,6 +63,11 @@ final class MeetingTrailState: ObservableObject {
     @Published private(set) var hint: String?
     @Published var status: String?
     @Published var recentSpeaker: String?
+#if !MEETING_TRAIL_PREVIEW
+    @Published var speakers: [SpeakerReviewRow] = []
+    @Published var speakerRecording: String?
+    @Published var canEditSpeakers = false
+#endif
     @Published var answer: String?
     @Published var answerFailed = false
     @Published private(set) var submittedQuestion: SubmittedQuestion?
@@ -79,6 +85,9 @@ final class MeetingTrailState: ObservableObject {
 
     var arm: (() -> Void)?
     var ask: ((String) -> Void)?
+#if !MEETING_TRAIL_PREVIEW
+    var reviewSpeaker: ((SpeakerReviewAction) async -> SpeakerReviewResponse)?
+#endif
 
     let file: URL
 
@@ -360,6 +369,11 @@ struct MeetingTrailView: View {
                 Text("Sobald die erste Notiz da ist, erscheint hier der Gesprächsverlauf.")
                     .foregroundStyle(supportingText)
             }
+#if !MEETING_TRAIL_PREVIEW
+            if state.reviewSpeaker != nil {
+                SpeakerReviewView(state: state)
+            }
+#endif
             if !state.armed, state.note?.ended != true, let arm = state.arm {
                 setupForm(arm)
             }

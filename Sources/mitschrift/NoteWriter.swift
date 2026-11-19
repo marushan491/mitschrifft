@@ -312,6 +312,7 @@ struct PartialSession {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         var spans: [SpeakerSpan] = []
         var attribution = SpeakerAttribution()
+        var review = SpeakerReview()
         for line in content.split(separator: "\n") {
             guard let data = line.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -344,6 +345,20 @@ struct PartialSession {
                       let start = object["start"] as? Double, let end = object["end"] as? Double,
                       start.isFinite, end.isFinite, start >= 0, end >= start else { continue }
                 attribution.add(name, at: .init(start: start, end: end))
+            case "speaker_review":
+                guard let raw = object["speaker"] as? Int, raw >= 0,
+                      let input = object["name"] as? String,
+                      let name = SpeakerIdentity.validName(input) else { continue }
+                review.manual[review.representative(raw)] = name
+            case "speaker_merge":
+                guard let raw = object["speaker"] as? Int, raw >= 0,
+                      let target = object["into"] as? Int, target >= 0 else { continue }
+                let from = review.representative(raw)
+                let to = review.representative(target)
+                guard from != to else { continue }
+                review.aliases[from] = to
+                review.manual[to] = review.manual[to] ?? review.manual.removeValue(forKey: from)
+                review.manual[from] = nil
             case "screen":
                 guard let at = object["at"] as? Double,
                       let app = object["app"] as? String
@@ -362,5 +377,6 @@ struct PartialSession {
         }
         segments = Speakers.label(segments.sorted { $0.start < $1.start }, spans: spans)
         if apps.contains(TeamsCaptionReader.appName) { segments = attribution.apply(to: segments) }
+        segments = review.apply(to: segments)
     }
 }

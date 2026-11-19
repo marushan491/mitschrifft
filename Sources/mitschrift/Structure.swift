@@ -17,6 +17,66 @@ struct Structure {
         return String(lines.joined(separator: "\n").prefix(limit))
     }
 
+    static func localParticipantHints(_ screen: String, knownNames: [String]) -> [String] {
+        let lines = screen.split(whereSeparator: \.isNewline).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let normalize: (String) -> String = { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        let visible = Set(lines.map(normalize))
+        var names = knownNames.filter { visible.contains(normalize($0)) }
+        let headings = ["teilnehmer", "participants", "personen", "people", "in dieser besprechung", "in this meeting"]
+        if let start = lines.firstIndex(where: { line in
+            let title = normalize(line).split(separator: "(").first?.trimmingCharacters(in: .whitespaces) ?? ""
+            return headings.contains(title)
+        }) {
+            for line in lines.dropFirst(start + 1).prefix(40) {
+                guard let name = TeamsCaption.personName(line) else {
+                    if line.count > 50 { break }
+                    continue
+                }
+                names.append(name)
+            }
+        }
+        return Array(Set(names).sorted().prefix(50))
+    }
+
+    func speakerSuggestions(evidence: [Int: String], screen: String, meeting: String?, apps: [String]) throws
+        -> [Int: SpeakerIdentity] {
+        struct Suggestion: Decodable {
+            let speaker: Int
+            let name: String
+            let quote: String
+        }
+        struct Result: Decodable { var suggestions: [Suggestion]? }
+
+        guard config.structureEnabled else { throw CodexError.failed("Die Codex-Auswertung ist ausgeschaltet.") }
+        let selected = evidence.sorted(by: { $0.key < $1.key }).prefix(8)
+        let excerpts = Dictionary(uniqueKeysWithValues: selected.map { (String($0.key), $0.value) })
+        guard !excerpts.isEmpty else { return [:] }
+        let request: [String: Any] = [
+            "mode": "participants", "speakerEvidence": excerpts,
+            "screen": screen, "meeting": meeting ?? "unbekannt", "apps": apps.joined(separator: ", "),
+            "ai": config.ai
+        ]
+        let payload = try JSONSerialization.data(withJSONObject: request)
+        let reply = try ask(payload: payload).answer
+        guard let start = reply.firstIndex(of: "{"), let end = reply.lastIndex(of: "}"), start < end else {
+            throw CodexError.failed("Sprechervorschläge sind nicht lesbar.")
+        }
+        let result = try JSONDecoder().decode(Result.self, from: Data(reply[start...end].utf8))
+        var candidates: [Int: SpeakerIdentity] = [:]
+        var ambiguous: Set<Int> = []
+        for item in (result.suggestions ?? []).prefix(16) {
+            let quote = item.quote.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (12...200).contains(quote.count), let excerpt = excerpts[String(item.speaker)],
+                  excerpt.range(of: quote, options: [.literal, .caseInsensitive]) != nil,
+                  let name = SpeakerIdentity.validName(item.name) else { continue }
+            if let current = candidates[item.speaker], current.name != name { ambiguous.insert(item.speaker) }
+            candidates[item.speaker] = SpeakerIdentity(name: name, source: .transcript, quote: quote)
+        }
+        return candidates.filter { !ambiguous.contains($0.key) }
+    }
+
     func enqueue(note: URL, roster: String = "") {
         guard config.structureEnabled else { return }
         do {

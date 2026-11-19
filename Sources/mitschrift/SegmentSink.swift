@@ -60,6 +60,14 @@ final class SegmentSink: @unchecked Sendable {
         writeLine(["kind": "speaker_name", "name": name, "start": start, "end": end])
     }
 
+    func appendSpeakerReview(speaker: Int, name: String) {
+        writeLine(["kind": "speaker_review", "speaker": speaker, "name": name])
+    }
+
+    func appendSpeakerMerge(speaker: Int, into: Int) {
+        writeLine(["kind": "speaker_merge", "speaker": speaker, "into": into])
+    }
+
     func append(screen: ScreenCapture) {
         var object: [String: Any] = [
             "kind": "screen",
