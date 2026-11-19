@@ -161,23 +161,8 @@ enum Speakers {
     }
 
     static func label(_ segments: [Segment], spans: [SpeakerSpan]) -> [Segment] {
+        guard !spans.isEmpty else { return segments }
         var labelled = segments
-        assignNumbers(segments, spans: spans) { index, raw, speaker, overlapping in
-            labelled[index].rawSpeaker = raw
-            labelled[index].speaker = speaker
-            if let overlapping { labelled[index].overlappingSpeakers = overlapping }
-        }
-        return labelled
-    }
-
-    static func numbering(_ segments: [Segment], spans: [SpeakerSpan]) -> [Int: Int] {
-        assignNumbers(segments, spans: spans)
-    }
-
-    @discardableResult
-    private static func assignNumbers(_ segments: [Segment], spans: [SpeakerSpan],
-                                      assign: ((Int, Int, Int, Bool?) -> Void)? = nil) -> [Int: Int] {
-        guard !spans.isEmpty else { return [:] }
         var numbering: [Int: Int] = [:]
         for (index, segment) in segments.enumerated() where segment.track == .system {
             var overlap: [Int: TimeInterval] = [:]
@@ -195,8 +180,10 @@ enum Speakers {
             let overlapping = ranked.dropFirst().first.map {
                 $0.value >= 0.25 && $0.value >= strongest.value * 0.30
             }
-            assign?(index, best, speaker, overlapping)
+            labelled[index].rawSpeaker = best
+            labelled[index].speaker = speaker
+            labelled[index].overlappingSpeakers = overlapping ?? false
         }
-        return numbering
+        return labelled
     }
 }

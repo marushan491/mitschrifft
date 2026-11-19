@@ -627,7 +627,7 @@ final class Supervisor {
                     try SpeakerProfiles.delete(id: id)
                     return try SpeakerProfiles.list()
                 }.value
-                await session?.refreshVoiceMatches()
+                await (session ?? lastSpeakerSession)?.refreshVoiceMatches()
                 return SpeakerReviewResponse(message: "Stimmprofil gelöscht.", profiles: profiles)
             }
             return SpeakerReviewResponse(message: "Die Aufnahme ist für diese Änderung nicht mehr verfügbar.")
