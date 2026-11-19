@@ -31,6 +31,7 @@ struct Segment: Sendable {
     var speaker: Int? = nil
     var rawSpeaker: Int? = nil
     var speakerName: String? = nil
+    var speakerIdentity: SpeakerIdentity? = nil
     var speakerNameUncertain = false
     var overlappingSpeakers = false
     var uncertain = false
@@ -149,6 +150,22 @@ actor TrackTranscriber {
     }
 
     func currentSegments() -> [Segment] { store.all() }
+
+    func setContextualStrings(_ strings: [String]) async throws {
+        var seen = Set<String>()
+        var phrases: [String] = []
+        for string in strings {
+            guard string.utf8.count <= 320 else { continue }
+            let phrase = string.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            guard (1...80).contains(phrase.count), seen.insert(phrase.lowercased()).inserted else { continue }
+            phrases.append(phrase)
+            if phrases.count == 100 { break }
+        }
+
+        let context = AnalysisContext()
+        if !phrases.isEmpty { context.contextualStrings = [.general: phrases] }
+        try await analyzer.setContext(context)
+    }
 
     func feed(_ buffer: AVAudioPCMBuffer, at time: CMTime) {
         guard let converted = convert(buffer), converted.frameLength > 0 else {

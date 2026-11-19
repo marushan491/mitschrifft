@@ -47,7 +47,7 @@ struct NoteWriter {
                       startedAt: Date,
                       endedAt: Date,
                       apps: [String],
-                      title: String) -> String {
+                      title: String) throws -> String {
         let iso = ISO8601DateFormatter()
         iso.timeZone = .current
         let duration = endedAt.timeIntervalSince(startedAt)
@@ -61,6 +61,7 @@ struct NoteWriter {
         duration: \(formatClock(duration))
         apps: [\(apps.map { "\"\($0)\"" }.joined(separator: ", "))]
         meeting: \(meeting.map { "\"\($0)\"" } ?? "unbekannt")
+        \(try speakerProperty(speakerLinks(in: segments)))
         tags: [transkript]
         ---
 
@@ -79,6 +80,66 @@ struct NoteWriter {
 
         out += blocks(segments)
         return out + videoSection(videoFiles) + screenSection(screens)
+    }
+
+    private func speakerLinks(in segments: [Segment]) -> [String] {
+        var seen = Set<String>()
+        return segments.compactMap { segment in
+            guard segment.track == .system, !segment.speakerNameUncertain, !segment.overlappingSpeakers,
+                  let name = segment.speakerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty, !name.contains(where: \.isNewline), !name.contains(where: "[]|#^".contains),
+                  seen.insert(name).inserted else { return nil }
+            return "[[\(name)]]"
+        }
+    }
+
+    private func speakerProperty(_ links: [String]) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        let values = try links.map { String(decoding: try encoder.encode($0), as: UTF8.self) }
+        return "sprecher: [" + values.joined(separator: ", ") + "]"
+    }
+
+    private func mergeSpeakers(_ added: [String], into lines: inout [String]) throws {
+        let key = "sprecher:"
+        guard let index = lines.firstIndex(where: { $0.hasPrefix(key) }) else {
+            lines.append(try speakerProperty(added))
+            return
+        }
+        guard !added.isEmpty else { return }
+
+        let decoder = JSONDecoder()
+        let value = lines[index].dropFirst(key.count).trimmingCharacters(in: .whitespaces)
+        var end = index + 1
+        let existing: [String]
+        if value.isEmpty {
+            let entries = lines[end...].prefix { line in
+                line.first?.isWhitespace == true || line.hasPrefix("- ") || line.isEmpty
+            }
+            var links: [String] = []
+            for position in entries.indices {
+                let item = entries[position].trimmingCharacters(in: .whitespaces)
+                if item.isEmpty { continue }
+                guard item.hasPrefix("- ") else { return }
+                let scalar = item.dropFirst(2).trimmingCharacters(in: .whitespaces)
+                if let link = try? decoder.decode(String.self, from: Data(scalar.utf8)) {
+                    links.append(link)
+                } else if scalar.count >= 2, scalar.hasPrefix("'"), scalar.hasSuffix("'") {
+                    links.append(scalar.dropFirst().dropLast().replacingOccurrences(of: "''", with: "'"))
+                } else {
+                    return
+                }
+                end = position + 1
+            }
+            existing = links
+        } else {
+            guard let links = try? decoder.decode([String].self, from: Data(value.utf8)) else { return }
+            existing = links
+        }
+        var seen = Set<String>()
+        let merged = (existing + added).filter { seen.insert($0).inserted }
+        guard merged != existing else { return }
+        lines.replaceSubrange(index..<end, with: [try speakerProperty(merged)])
     }
 
     private func blocks(_ segments: [Segment]) -> String {
@@ -134,9 +195,11 @@ struct NoteWriter {
         var best: (url: URL, ended: Date)?
 
         for url in files where url.pathExtension == "md" {
-            guard let head = try? String(contentsOf: url, encoding: .utf8).prefix(700) else { continue }
-            guard value(of: "meeting", in: String(head)) == meeting else { continue }
-            guard let stamp = value(of: "ended", in: String(head)),
+            guard let text = try? String(contentsOf: url, encoding: .utf8),
+                  let header = frontmatter(in: text) else { continue }
+            let lines = text[header.range].split(separator: header.newline)
+            guard value(of: "meeting", in: lines) == meeting else { continue }
+            guard let stamp = value(of: "ended", in: lines),
                   let ended = ISO8601DateFormatter().date(from: stamp) else { continue }
             let gap = start.timeIntervalSince(ended)
             guard gap >= -60, gap <= window else { continue }
@@ -145,8 +208,16 @@ struct NoteWriter {
         return best?.url
     }
 
-    private func value(of key: String, in text: String) -> String? {
-        for line in text.split(separator: "\n") where line.hasPrefix("\(key):") {
+    private func frontmatter(in text: String) -> (range: Range<String.Index>, newline: Character)? {
+        guard let firstBreak = text.firstIndex(where: \.isNewline), text[..<firstBreak] == "---" else { return nil }
+        let newline = text[firstBreak]
+        let start = text.index(after: firstBreak)
+        guard let end = text.range(of: "\(newline)---\(newline)", range: start..<text.endIndex) else { return nil }
+        return (start..<end.lowerBound, newline)
+    }
+
+    private func value(of key: String, in lines: [Substring]) -> String? {
+        for line in lines where line.hasPrefix("\(key):") {
             var raw = line.dropFirst(key.count + 1).trimmingCharacters(in: .whitespaces)
             if raw.hasPrefix("\"") { raw = String(raw.dropFirst().dropLast()) }
             return raw.isEmpty ? nil : raw
@@ -164,8 +235,14 @@ struct NoteWriter {
 
         let iso = ISO8601DateFormatter()
         iso.timeZone = .current
-        if let old = value(of: "ended", in: text) {
-            text = text.replacingOccurrences(of: "ended: \(old)", with: "ended: \(iso.string(from: endedAt))")
+        if let header = frontmatter(in: text) {
+            var lines = text[header.range].split(separator: header.newline, omittingEmptySubsequences: false)
+                .map(String.init)
+            if let index = lines.firstIndex(where: { $0.hasPrefix("ended:") }) {
+                lines[index] = "ended: \(iso.string(from: endedAt))"
+            }
+            try mergeSpeakers(speakerLinks(in: segments), into: &lines)
+            text.replaceSubrange(header.range, with: lines.joined(separator: String(header.newline)))
         }
 
         let clock = DateFormatter()
